@@ -665,36 +665,47 @@ const determineNashEquilibrium = (matrix) => {
     const rows = matrix.length;
     const cols = matrix[0].length;
     const equilibria = [];
-    const player1BestResponses = new Array(cols).fill(-1);
-    const player2BestResponses = new Array(rows).fill(-1);
 
+    // arrays of arrays: pe fiecare col/rând poți avea mai multe best responses
+    const player1BestResponses = Array.from({ length: cols }, () => []);
+    const player2BestResponses = Array.from({ length: rows }, () => []);
+
+    // Best responses for Player 1 (column-based)
     for (let j = 0; j < cols; j++) {
-        let maxPayoff = -1;
-        let bestRow = -1;
+        let maxPayoff = -Infinity;
+
         for (let i = 0; i < rows; i++) {
-            if (matrix[i][j][0] > maxPayoff) {
-                maxPayoff = matrix[i][j][0];
-                bestRow = i;
+            const payoff = matrix[i][j][0];
+
+            if (payoff > maxPayoff) {
+                maxPayoff = payoff;
+                player1BestResponses[j] = [i]; // reset
+            } else if (payoff === maxPayoff) {
+                player1BestResponses[j].push(i); // keep ties
             }
         }
-        player1BestResponses[j] = bestRow;
     }
 
+    // Best responses for Player 2 (row-based)
     for (let i = 0; i < rows; i++) {
-        let maxPayoff = -1;
-        let bestCol = -1;
+        let maxPayoff = -Infinity;
+
         for (let j = 0; j < cols; j++) {
-            if (matrix[i][j][1] > maxPayoff) {
-                maxPayoff = matrix[i][j][1];
-                bestCol = j;
+            const payoff = matrix[i][j][1];
+
+            if (payoff > maxPayoff) {
+                maxPayoff = payoff;
+                player2BestResponses[i] = [j]; // reset
+            } else if (payoff === maxPayoff) {
+                player2BestResponses[i].push(j); // keep ties
             }
         }
-        player2BestResponses[i] = bestCol;
     }
 
+    // intersections = Nash equilibria
     for (let i = 0; i < rows; i++) {
         for (let j = 0; j < cols; j++) {
-            if (player1BestResponses[j] === i && player2BestResponses[i] === j) {
+            if (player1BestResponses[j].includes(i) && player2BestResponses[i].includes(j)) {
                 equilibria.push(`(Rând ${i + 1}, Coloana ${j + 1})`);
             }
         }
@@ -704,10 +715,10 @@ const determineNashEquilibrium = (matrix) => {
 
     if (equilibria.length === 0) {
         strategyText = 'NU există';
-        reasonText = 'Nu a fost găsit niciun Echilibru Nash Pur. Nicio pereche de strategii nu reprezintă reciproc Cel Mai Bun Răspuns pentru ambii jucători.';
+        reasonText = 'Niciun echilibru Nash pur.';
     } else {
         strategyText = equilibria.join('; ');
-        reasonText = `Echilibrele Nash Pure sunt ${strategyText}. Fiecare echilibru reprezintă o pereche de strategii unde strategia fiecărui jucător este Cel Mai Bun Răspuns la strategia celuilalt.`;
+        reasonText = `Echilibrele Nash Pure sunt: ${strategyText}.`;
     }
 
     return {
@@ -717,6 +728,7 @@ const determineNashEquilibrium = (matrix) => {
         rawEquilibria: equilibria
     };
 };
+
 
 const generateQuestion = (type) => {
     return new Promise((resolve) => {

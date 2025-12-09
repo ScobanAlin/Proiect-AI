@@ -423,82 +423,93 @@ const parseSearchProblems = (text) => {
 };
 
 const extractMatrixFromText = (text) => {
-    const payoffRegex = /\(\s*(\d+)\s*,\s*(\d+)\s*\)/g;
-    const allMatches = [...text.matchAll(payoffRegex)];
+    const payoffRegex = /\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/g;
 
-    if (allMatches.length === 0) {
-        return null;
+    // 1️⃣ Split în rânduri prin ;
+    let rowsRaw = text.split(";");
+
+    // 2️⃣ Dacă nu există ;, split prin newline
+    if (rowsRaw.length === 1) {
+        rowsRaw = text.split("\n");
     }
 
-    const allPayoffs = allMatches.map(match => [
-        parseInt(match[1].trim()),
-        parseInt(match[2].trim())
-    ]);
-
-    const totalCells = allPayoffs.length;
-    let size = 0;
-
-    if (totalCells === 4) {
-        size = 2;
-    } else if (totalCells === 9) {
-        size = 3;
-    } else {
-        return null;
-    }
+    // 3️⃣ Curățare
+    rowsRaw = rowsRaw
+        .map(r => r.trim())
+        .filter(r => r.length > 0);
 
     const matrix = [];
-    let k = 0;
-    for (let i = 0; i < size; i++) {
-        const row = [];
-        for (let j = 0; j < size; j++) {
-            row.push(allPayoffs[k++]);
-        }
-        matrix.push(row);
+
+    for (const row of rowsRaw) {
+        const matches = [...row.matchAll(payoffRegex)];
+        if (matches.length === 0) continue;
+
+        const parsedRow = matches.map(m => [
+            parseInt(m[1], 10),
+            parseInt(m[2], 10)
+        ]);
+
+        matrix.push(parsedRow);
+    }
+
+    if (matrix.length === 0) return null;
+
+    // 4️⃣ Verificăm consistența rândurilor
+    const colCount = matrix[0].length;
+    if (!matrix.every(r => r.length === colCount)) {
+        console.warn("Matrice inconsistentă — diferite număr de coloane pe rând.");
+        return null;
     }
 
     return matrix;
 };
 
+
+
 const parseQuestionFromText = (text) => {
     const problems = [];
     const lowerText = text.toLowerCase();
 
-    // 1. Detect Nash Equilibrium and parse matrix
     if (lowerText.includes('nash') || lowerText.includes('echilibru') || lowerText.includes('matrice')) {
+
         const parsedMatrix = extractMatrixFromText(text);
 
-        if (parsedMatrix && parsedMatrix.length >= 2) {
+        if (parsedMatrix) {
             const rows = parsedMatrix.length;
             const cols = parsedMatrix[0].length;
 
-            const instance = {
-                matrix: parsedMatrix,
-                size: rows,
-                text: `Joc parsată de utilizator ${rows}x${cols}.`,
-                visual: parsedMatrix.map(row => row.map(cell => `(${cell[0]}, ${cell[1]})`).join(' | ')).join('\n')
-            };
-
             problems.push({
                 name: 'Nash Equilibrium',
-                instance: instance
+                instance: {
+                    matrix: parsedMatrix,
+                    rows,
+                    cols,
+                    text: `Joc parsat ${rows}x${cols}`,
+                    visual: parsedMatrix
+                        .map(r => r.map(c => `(${c[0]}, ${c[1]})`).join(" | "))
+                        .join(" ;\n")
+                }
             });
 
             return problems;
-        } else if (lowerText.includes('nash')) {
-            const exampleInstance = generateNashInstance();
-            problems.push({
-                name: 'Nash Equilibrium',
-                instance: exampleInstance
-            });
         }
+
+        // Fall back to random example
+        const exampleInstance = generateNashInstance();
+        problems.push({
+            name: 'Nash Equilibrium',
+            instance: exampleInstance
+        });
+
+        return problems;
     }
 
-    // 2. Detect Search problems
+    // search problems as before
     const searchProblems = parseSearchProblems(text);
     problems.push(...searchProblems);
-
     return problems;
 };
+
 
 const generateChatResponse = (question) => {
     const parsedProblems = parseQuestionFromText(question);
@@ -645,21 +656,32 @@ const determineOptimalSearchStrategy = (problemName, instance) => {
 
 const generateNashInstance = () => {
     const config = db.getGameConfig();
-    const size = Math.random() < 0.7 ? config.min_matrix_size : config.max_matrix_size;
-    const matrix = Array(size).fill(0).map(() =>
-        Array(size).fill(0).map(() => [
+
+    const rows = Math.floor(Math.random() * 4) + 2; // 2–5
+    const cols = Math.floor(Math.random() * 4) + 2; // 2–5
+
+    const matrix = Array(rows).fill(0).map(() =>
+        Array(cols).fill(0).map(() => [
             Math.floor(Math.random() * (config.max_payoff + 1)),
             Math.floor(Math.random() * (config.max_payoff + 1))
         ])
     );
 
+    // FORMAT CU ;
+    const visual = matrix
+        .map(r => r.map(c => `(${c[0]}, ${c[1]})`).join(" | "))
+        .join(" ;\n");
+
     return {
         matrix,
-        size,
-        text: `Joc în formă normală ${size}x${size}. Plățile sunt (P1, P2):`,
-        visual: matrix.map(row => row.map(cell => `(${cell[0]}, ${cell[1]})`).join(' | ')).join('\n')
+        rows,
+        cols,
+        text: `Joc în formă normală ${rows}x${cols}`,
+        visual
     };
 };
+
+
 
 const determineNashEquilibrium = (matrix) => {
     const rows = matrix.length;
@@ -896,7 +918,7 @@ const styles = {
     messageBubble: { maxWidth: '80%', borderRadius: '16px', padding: '16px' },
     messageBubbleUser: { background: '#4f46e5', color: 'white' },
     messageBubbleAssistant: { background: '#f3f4f6', color: '#1f2937' },
-    messageText: { whiteSpace: 'pre-line', fontSize: '14px' },
+    messageText: { whiteSpace: 'pre-wrap', fontSize: '14px' },
     chatInput: { padding: '24px', borderTop: '1px solid #e5e7eb' },
     chatInputRow: { display: 'flex', gap: '8px' },
     input: { flex: 1, padding: '12px', border: '2px solid #e5e7eb', borderRadius: '12px', fontSize: '14px', outline: 'none' },
@@ -1080,7 +1102,7 @@ const SmarTestApp = () => {
                                 chatMessages.map((msg, idx) => (
                                     <div key={idx} style={{ ...styles.messageRow, ...(msg.role === 'user' ? styles.messageRowUser : styles.messageRowAssistant) }}>
                                         <div style={{ ...styles.messageBubble, ...(msg.role === 'user' ? styles.messageBubbleUser : styles.messageBubbleAssistant) }}>
-                                            <p style={styles.messageText}>{msg.content}</p>
+                                            <pre style={styles.messageText}>{msg.content}</pre>
                                         </div>
                                     </div>
                                 ))

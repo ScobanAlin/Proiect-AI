@@ -1,18 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { BookOpen, MessageSquare, CheckCircle, AlertCircle, Send, Sparkles, FileText, RotateCcw, Box, Database } from 'lucide-react';
 
-
-
-
-
-
-
-
 // ============================================================================
 // DATABASE INITIALIZATION AND SCHEMA
 // ============================================================================
-
-
 
 const initDatabase = () => {
     const SQL = `
@@ -171,24 +162,26 @@ class DatabaseService {
 
         statements.forEach(stmt => {
             if (stmt.includes('INSERT') && stmt.includes('problem_types')) {
+                // Găsește TOATE grupurile de tip ('name','desc','category')
                 const matches = [...stmt.matchAll(/\('([^']+)',\s*'([^']+)',\s*'([^']+)'\)/g)];
-
-                matches.forEach(m => {
+                matches.forEach((m) => {
                     const [, name, description, category] = m;
                     this.db.problemTypes.push({
                         id: this.db.problemTypes.length + 1,
                         name,
                         description,
-                        category
+                        category,
                     });
                 });
             }
 
             if (stmt.includes('INSERT') && stmt.includes('search_strategies')) {
-                const matches = [...stmt.matchAll(/\('([^']+)',\s*'([^']+)',\s*'([^']+)'\)/g)];
+                const matches = stmt.match(/\('([^']+)',\s*'([^']+)',\s*'([^']+)'\)/g);
 
-                matches.forEach(m => {
-                    const [, name, type, description] = m;
+                matches?.forEach(match => {
+                    const [, name, type, description] =
+                        match.match(/\('([^']+)',\s*'([^']+)',\s*'([^']+)'\)/);
+
                     this.db.searchStrategies.push({
                         id: this.db.searchStrategies.length + 1,
                         name,
@@ -324,6 +317,233 @@ class DatabaseService {
 // Initialize database
 const db = new DatabaseService();
 db.init();
+
+// ============================================================================
+// CHAT AGENT - PARSER LOGIC
+// ============================================================================
+
+const parseSearchProblems = (text) => {
+    const problems = [];
+    const lines = text.split('\n').filter(line => line.trim());
+
+    for (const line of lines) {
+        // 1. N-Queens
+        if (line.toLowerCase().includes('queens') || line.toLowerCase().includes('regine')) {
+            const nMatch = line.match(/n\s*=\s*(\d+)/i) || line.match(/(\d+)\s*regine/i) || line.match(/tablă\s*(\d+)x\s*\d+/i);
+            if (nMatch) {
+                const n = parseInt(nMatch[1]);
+                problems.push({
+                    name: 'N-Queens',
+                    instance: { text: `N=${n} (tablă ${n}x${n})`, n: n, size: n }
+                });
+            }
+        }
+
+        // 2. Generalized Hanoi
+        if (line.toLowerCase().includes('hanoi') || line.toLowerCase().includes('discuri')) {
+            const discMatch = line.match(/(\d+)\s*discuri/i);
+            const pegMatch = line.match(/(\d+)\s*tije/i);
+            if (discMatch) {
+                const discs = parseInt(discMatch[1]);
+                const pegs = pegMatch ? parseInt(pegMatch[1]) : 3;
+                problems.push({
+                    name: 'Generalized Hanoi',
+                    instance: { text: `${discs} discuri, ${pegs} tije`, discs, pegs, size: discs }
+                });
+            }
+        }
+
+        // 3. Graph Coloring
+        if (line.toLowerCase().includes('graph') || line.toLowerCase().includes('graf') || line.toLowerCase().includes('colorare')) {
+            const nodeMatch = line.match(/(\d+)\s*noduri/i);
+            const edgeMatch = line.match(/(\d+)\s*muchii/i);
+            const colorMatch = line.match(/(\d+)\s*culori/i);
+            const isDenseUser = line.toLowerCase().includes('dens');
+
+            if (nodeMatch) {
+                const nodes = parseInt(nodeMatch[1]);
+                const maxEdges = nodes * (nodes - 1) / 2;
+                let edges = edgeMatch ? parseInt(edgeMatch[1]) : null;
+                const colors = colorMatch ? parseInt(colorMatch[1]) : 3;
+
+                if (edges === null || edges < nodes - 1 || edges > maxEdges) {
+                    const generatedInstance = generateSearchInstance('Graph Coloring');
+                    edges = generatedInstance.edges;
+                }
+
+                const densityRatio = edges / maxEdges;
+                let finalDensity;
+                if (densityRatio >= 0.6) {
+                    finalDensity = 'dens';
+                } else if (densityRatio <= 0.3) {
+                    finalDensity = 'rar';
+                } else {
+                    finalDensity = 'mediu';
+                }
+
+                problems.push({
+                    name: 'Graph Coloring',
+                    instance: {
+                        text: `Graf ${finalDensity} cu ${nodes} noduri, ${edges} muchii, ${colors} culori`,
+                        nodes: nodes,
+                        edges: edges,
+                        colors: colors,
+                        density: finalDensity,
+                        size: nodes
+                    }
+                });
+            }
+        }
+
+        // 4. Knight's Tour
+        if (line.toLowerCase().includes('knight') || line.toLowerCase().includes('cal')) {
+            const sizeMatch = line.match(/(\d+)\s*x\s*(\d+)/i) || line.match(/tablă\s*(\d+)/i);
+            if (sizeMatch) {
+                const size = parseInt(sizeMatch[1]);
+                problems.push({
+                    name: "Knight's Tour",
+                    instance: { text: `Tablă ${size}x${size}`, size }
+                });
+            }
+        }
+    }
+
+    // Generate random instance if generic question
+    if (problems.length === 0 && (text.toLowerCase().includes('strategie') || text.toLowerCase().includes('backtracking') || text.toLowerCase().includes('a*'))) {
+        const searchProblems = db.getAllProblemTypes('Search');
+        const randomProblem = searchProblems[Math.floor(Math.random() * searchProblems.length)];
+        const instance = generateSearchInstance(randomProblem.name);
+        problems.push({
+            name: randomProblem.name,
+            instance: instance
+        });
+    }
+
+    return problems;
+};
+
+const extractMatrixFromText = (text) => {
+    const payoffRegex = /\(\s*(\d+)\s*,\s*(\d+)\s*\)/g;
+    const allMatches = [...text.matchAll(payoffRegex)];
+
+    if (allMatches.length === 0) {
+        return null;
+    }
+
+    const allPayoffs = allMatches.map(match => [
+        parseInt(match[1].trim()),
+        parseInt(match[2].trim())
+    ]);
+
+    const totalCells = allPayoffs.length;
+    let size = 0;
+
+    if (totalCells === 4) {
+        size = 2;
+    } else if (totalCells === 9) {
+        size = 3;
+    } else {
+        return null;
+    }
+
+    const matrix = [];
+    let k = 0;
+    for (let i = 0; i < size; i++) {
+        const row = [];
+        for (let j = 0; j < size; j++) {
+            row.push(allPayoffs[k++]);
+        }
+        matrix.push(row);
+    }
+
+    return matrix;
+};
+
+const parseQuestionFromText = (text) => {
+    const problems = [];
+    const lowerText = text.toLowerCase();
+
+    // 1. Detect Nash Equilibrium and parse matrix
+    if (lowerText.includes('nash') || lowerText.includes('echilibru') || lowerText.includes('matrice')) {
+        const parsedMatrix = extractMatrixFromText(text);
+
+        if (parsedMatrix && parsedMatrix.length >= 2) {
+            const rows = parsedMatrix.length;
+            const cols = parsedMatrix[0].length;
+
+            const instance = {
+                matrix: parsedMatrix,
+                size: rows,
+                text: `Joc parsată de utilizator ${rows}x${cols}.`,
+                visual: parsedMatrix.map(row => row.map(cell => `(${cell[0]}, ${cell[1]})`).join(' | ')).join('\n')
+            };
+
+            problems.push({
+                name: 'Nash Equilibrium',
+                instance: instance
+            });
+
+            return problems;
+        } else if (lowerText.includes('nash')) {
+            const exampleInstance = generateNashInstance();
+            problems.push({
+                name: 'Nash Equilibrium',
+                instance: exampleInstance
+            });
+        }
+    }
+
+    // 2. Detect Search problems
+    const searchProblems = parseSearchProblems(text);
+    problems.push(...searchProblems);
+
+    return problems;
+};
+
+const generateChatResponse = (question) => {
+    const parsedProblems = parseQuestionFromText(question);
+
+    if (parsedProblems.length > 0) {
+        const answers = parsedProblems.map(p => {
+            if (p.name === 'Nash Equilibrium') {
+                const answer = determineNashEquilibrium(p.instance.matrix);
+                const problemVisual = p.instance.text.startsWith('Joc parsată')
+                    ? `Matricea analizată:\n${p.instance.visual}`
+                    : `Exemplu (generat):\n${p.instance.visual}`;
+
+                return `**${p.name}**:\n${problemVisual}\n\n**Răspuns: ${answer.strategy}**\n\n*Justificare*: ${answer.reason}`;
+            } else {
+                const answer = determineOptimalSearchStrategy(p.name, p.instance);
+                return `**${p.name}** (${p.instance.text}):\n\n**Strategie optimă: ${answer.strategy}**\n\n*Justificare*: ${answer.reason}`;
+            }
+        });
+        return answers.join('\n\n---\n\n');
+    }
+
+    const qLower = question.toLowerCase();
+
+    if (qLower.includes('uninformed') || qLower.includes('neinformat')) {
+        return `**Strategii Uninformed (fără heuristici)**\n\nAceste strategii nu disting între stări:\n\n• **BFS**: Găsește cel mai scurt drum (pentru costuri unitare)\n• **Iterative Deepening**: DFS cu limite, memorie redusă + completitudine\n• **Backtracking**: DFS cu pruning, elimină ramuri invalide (pentru CSP)\n\n**Când se folosesc**: Probleme mici/medii, lipsa heuristicilor bune.`;
+    }
+    if (qLower.includes('informed') || qLower.includes('heuristic')) {
+        return `**Strategii Informed (cu heuristici)**\n\nFolosesc cunoștințe despre domeniu pentru a ghida căutarea:\n\n• **Greedy Best-First**: Rapid, neoptim, alege starea cu h(n) minim\n• **Simulated Annealing**: Scapă de minimele locale prin acceptarea probabilistică a soluțiilor mai slabe\n• **A***: Optim dacă h admisibilă, f(n) = g(n) + h(n)\n\n**Când se folosesc**: Probleme mari unde uninformed e prea lent, existența heuristicilor bune.`;
+    }
+    if (qLower.includes('a*') || qLower.includes('a star')) {
+        return `**A* Search**\n\nA* este optim dacă euristica h(n) este admisibilă (h(n) ≤ cost real până la goal).\n\n**Formula**: f(n) = g(n) + h(n)\n- g(n) = cost de la start la n\n- h(n) = estimare cost de la n la goal\n\n**Avantaje**: Găsește soluția optimă, eficient cu euristică bună\n**Dezavantaje**: Memorie mare pentru probleme complexe`;
+    }
+    if (qLower.includes('backtracking')) {
+        return `**Backtracking**\n\nBacktracking este un DFS cu pruning (eliminare timpurie a ramurilor invalide).\n\n**Când e optim**: Probleme CSP mici, precum N-Queens (N≤8) sau Sudoku.\n\n**Avantaje**: Elimină rapid căi imposibile, memorie redusă\n**Exemplu clasic**: Plasarea reginelor pe tablă, verificând conflictele înainte de a continua.`;
+    }
+    if (qLower.includes('nash equilibrium') || qLower.includes('echilibru nash')) {
+        return `**Echilibrul Nash Pur**\n\n**Definiție**: O pereche de strategii (σ₁, σ₂) este un Echilibru Nash Pur dacă strategia fiecărui jucător este un **Cel Mai Bun Răspuns** (Best Response) la strategia celuilalt.\n\nP₁ joacă σ₁ maximizând utilitatea sa, presupunând că P₂ joacă σ₂. P₂ face același lucru.\n\n**Cum se găsește**:\n1. Pentru fiecare coloană, găsește cea mai bună strategie a P1\n2. Pentru fiecare rând, găsește cea mai bună strategie a P2\n3. Echilibrele sunt celulele unde ambele răspunsuri se intersectează`;
+    }
+
+    if (qLower.includes('database') || qLower.includes('baza de date')) {
+        return `**Database Status** 📊\n\nBaza de date conține:\n• ${db.db.problemTypes.length} tipuri de probleme\n• ${db.db.searchStrategies.length} strategii de căutare (${db.db.searchStrategies.filter(s => s.type === 'Uninformed').length} Uninformed + ${db.db.searchStrategies.filter(s => s.type === 'Informed').length} Informed)\n• ${db.db.strategyRules.length} reguli de mapare\n• ${db.db.questionLog.length} întrebări generate\n\nÎntreabă despre orice strategie sau problemă specifică!`;
+    }
+
+    return `**Sunt gata să te ajut!** 🤖\n\nÎntreabă-mă despre:\n• Strategii de căutare (A*, Backtracking, Greedy, BFS, DFS)\n• Probleme specifice (N-Queens, Hanoi, Graph Coloring, Knight's Tour)\n• Echilibru Nash (inclusiv parsarea unei matrici)\n\n**Exemple de întrebări**:\n- "N-Queens cu N=10?"\n- "Hanoi 12 discuri 4 tije?"\n- "Nash Equilibrium (4,5) | (5,5) | (3,4) | (4,3)"\n- "Ce este A*?"`;
+};
 
 // ============================================================================
 // API SERVICE (Using Database)
@@ -704,7 +924,7 @@ const SmarTestApp = () => {
         setChatInput('');
 
         setTimeout(() => {
-            const response = `Răspuns simulat pentru: "${currentInput}"\n\nBaza de date conține:\n- ${db.db.problemTypes.length} tipuri de probleme\n- ${db.db.searchStrategies.length} strategii de căutare\n- ${db.db.strategyRules.length} reguli de mapare\n\nÎntreabă despre strategii specifice!`;
+            const response = generateChatResponse(currentInput);
             setChatMessages(prev => [...prev, { role: 'assistant', content: response }]);
         }, 500);
     };

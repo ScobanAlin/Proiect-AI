@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { BookOpen, MessageSquare, CheckCircle, AlertCircle, Send, Sparkles, FileText, RotateCcw, Box, Database } from 'lucide-react';
+import { BookOpen, MessageSquare, CheckCircle, AlertCircle, Send, Sparkles, FileText, RotateCcw, Box, Database, Zap } from 'lucide-react';
+import { runAlgorithmComparison, selectBestStrategy } from '../utils/algorithmSolvers';
 
 // ============================================================================
 // DATABASE INITIALIZATION AND SCHEMA
@@ -761,12 +762,18 @@ const generateQuestion = (type) => {
                 const instance = generateSearchInstance(selectedProblem.name);
                 const correctAnswer = determineOptimalSearchStrategy(selectedProblem.name, instance);
 
+                // Run algorithm comparison
+                const comparisonResults = runAlgorithmComparison(selectedProblem.name, instance);
+                const bestStrategy = selectBestStrategy(comparisonResults);
+
                 const question = {
                     id: Date.now(),
                     problem: { ...selectedProblem, instance },
                     correctAnswer: correctAnswer,
                     type: 'Search',
-                    text: `Pentru problema **${selectedProblem.name}** cu instanța:\n\n${instance.text}\n\nCare este cea mai potrivită strategie de rezolvare?`
+                    text: `Pentru problema **${selectedProblem.name}** cu instanța:\n\n${instance.text}\n\nCare este cea mai potrivită strategie de rezolvare?`,
+                    comparisonResults: comparisonResults,
+                    bestStrategy: bestStrategy
                 };
 
                 db.logQuestion(selectedProblem.id, instance, correctAnswer);
@@ -899,6 +906,12 @@ const styles = {
     reasonBox: { background: '#faf5ff', borderRadius: '8px', padding: '16px' },
     reasonLabel: { fontSize: '14px', fontWeight: '600', color: '#581c87', marginBottom: '8px' },
     reasonText: { color: '#374151' },
+    comparisonBox: { background: '#f0f9ff', borderRadius: '12px', padding: '16px', marginTop: '16px', borderLeft: '4px solid #0284c7' },
+    comparisonTitle: { fontSize: '14px', fontWeight: '600', color: '#0c4a6e', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' },
+    comparisonTable: { width: '100%', borderCollapse: 'collapse', fontSize: '13px' },
+    comparisonTh: { background: '#e0f2fe', padding: '8px', textAlign: 'left', fontWeight: '600', color: '#0c4a6e', borderBottom: '2px solid #0284c7' },
+    comparisonTd: { padding: '8px', borderBottom: '1px solid #bae6fd', color: '#164e63' },
+    comparisonBest: { background: '#cffafe', fontWeight: '600', color: '#0c4a6e' },
     questionTypeSelector: { display: 'flex', gap: '12px', marginBottom: '16px', padding: '0 8px' },
     typeButton: { flex: 1, padding: '12px 16px', borderRadius: '12px', fontWeight: '600', border: '2px solid #e5e7eb', cursor: 'pointer', background: 'white', transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' },
     typeButtonActive: { borderColor: '#4f46e5', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)', background: '#eef2ff', color: '#4f46e5' },
@@ -965,11 +978,11 @@ const SmarTestApp = () => {
 
     const QuestionTypeSelector = () => (
         <div style={styles.questionTypeSelector}>
-            <button onClick={() => setQuestionType('search')} style={{ ...styles.typeButton, ...(questionType === 'search' ? styles.typeButtonActive : {}) }}>
+            <button onClick={() => { setQuestionType('search'); setCurrentQuestion(null); setEvaluation(null); setUserAnswer(''); }} style={{ ...styles.typeButton, ...(questionType === 'search' ? styles.typeButtonActive : {}) }}>
                 <Sparkles style={{ width: '20px', height: '20px' }} />
                 Strategii Căutare
             </button>
-            <button onClick={() => setQuestionType('nash')} style={{ ...styles.typeButton, ...(questionType === 'nash' ? styles.typeButtonActive : {}) }}>
+            <button onClick={() => { setQuestionType('nash'); setCurrentQuestion(null); setEvaluation(null); setUserAnswer(''); }} style={{ ...styles.typeButton, ...(questionType === 'nash' ? styles.typeButtonActive : {}) }}>
                 <Box style={{ width: '20px', height: '20px' }} />
                 Echilibru Nash
             </button>
@@ -1041,6 +1054,47 @@ const SmarTestApp = () => {
                                             )}
                                         </div>
                                     </div>
+
+                                    {currentQuestion.type === 'Search' && currentQuestion.comparisonResults && currentQuestion.comparisonResults.length > 0 && evaluation && (
+                                        <div style={styles.comparisonBox}>
+                                            <div style={styles.comparisonTitle}>
+                                                <Zap style={{ width: '16px', height: '16px' }} />
+                                                Comparație Algoritmi - Rezultate Execuție
+                                            </div>
+                                            <table style={styles.comparisonTable}>
+                                                <thead>
+                                                    <tr>
+                                                        <th style={styles.comparisonTh}>Algoritm</th>
+                                                        <th style={styles.comparisonTh}>Status</th>
+                                                        <th style={styles.comparisonTh}>Timp (ms)</th>
+                                                        <th style={styles.comparisonTh}>Noduri Explorate</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {currentQuestion.comparisonResults.map((result, idx) => (
+                                                        <tr key={idx} style={currentQuestion.bestStrategy && result === currentQuestion.bestStrategy ? { background: '#cffafe' } : {}}>
+                                                            <td style={{ ...styles.comparisonTd, fontWeight: currentQuestion.bestStrategy && result === currentQuestion.bestStrategy ? '600' : 'normal' }}>
+                                                                {result.strategyUsed}
+                                                                {currentQuestion.bestStrategy && result === currentQuestion.bestStrategy && ' ⭐'}
+                                                            </td>
+                                                            <td style={styles.comparisonTd}>
+                                                                {result.found ? '✅ Soluție găsită' : '⚠️ Nu s-a găsi'}
+                                                            </td>
+                                                            <td style={{ ...styles.comparisonTd, fontWeight: 'bold', color: result === currentQuestion.bestStrategy ? '#0c4a6e' : '#164e63' }}>
+                                                                {result.executionTime}
+                                                            </td>
+                                                            <td style={styles.comparisonTd}>{result.nodesExplored}</td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                            {currentQuestion.bestStrategy && (
+                                                <div style={{ marginTop: '12px', padding: '8px', background: '#d1fae5', borderRadius: '6px', fontSize: '13px', color: '#065f46' }}>
+                                                    <strong>Cel mai rapid:</strong> {currentQuestion.bestStrategy.strategyUsed} - {currentQuestion.bestStrategy.executionTime}ms
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div style={styles.card}>

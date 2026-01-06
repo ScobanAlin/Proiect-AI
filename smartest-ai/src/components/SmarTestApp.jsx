@@ -760,11 +760,17 @@ const generateQuestion = (type) => {
                 const searchProblems = db.getAllProblemTypes('Search');
                 const selectedProblem = searchProblems[Math.floor(Math.random() * searchProblems.length)];
                 const instance = generateSearchInstance(selectedProblem.name);
-                const correctAnswer = determineOptimalSearchStrategy(selectedProblem.name, instance);
 
-                // Run algorithm comparison
+                // Run algorithm comparison - use ACTUAL results for correctness
                 const comparisonResults = runAlgorithmComparison(selectedProblem.name, instance);
                 const bestStrategy = selectBestStrategy(comparisonResults);
+                
+                // Create correctAnswer from actual algorithm results (empirical, not theoretical)
+                const correctAnswer = {
+                    strategy: bestStrategy.strategyUsed,
+                    reason: `Strategia ${bestStrategy.strategyUsed} este cea mai rapidă pentru această instanță (${bestStrategy.executionTime}ms), explorând ${bestStrategy.nodesExplored} noduri.`,
+                    type: 'Search'
+                };
 
                 const question = {
                     id: Date.now(),
@@ -799,7 +805,7 @@ const generateQuestion = (type) => {
 };
 
 const evaluateAnswer = (question, userAnswer) => {
-    const { type, correctAnswer } = question;
+    const { type, correctAnswer, comparisonResults, bestStrategy } = question;
     const userAnswerLower = userAnswer.toLowerCase().trim();
     let score = 0;
     let feedback = '';
@@ -807,52 +813,252 @@ const evaluateAnswer = (question, userAnswer) => {
     if (type === 'Search') {
         const correctStrategyLower = correctAnswer.strategy.toLowerCase();
 
+        // Exact match - full credit
         if (userAnswerLower.includes(correctStrategyLower)) {
             score = 100;
-            feedback = `Excelent! ${correctAnswer.strategy} este strategia optimă pentru această instanță.`;
+            feedback = `Excelent! ${correctAnswer.strategy} este strategia cu cea mai bună performanță pentru această instanță (${bestStrategy.executionTime}ms).`;
         } else {
             const allStrategies = db.db.searchStrategies;
             let foundStrategy = null;
+            let foundStrategyName = null;
+            let isPartialMatch = false;
 
+            // Check which strategy user mentioned
             for (const strategy of allStrategies) {
-                if (userAnswerLower.includes(strategy.name.toLowerCase())) {
-                    foundStrategy = strategy.name;
+                const strategyLower = strategy.name.toLowerCase();
+                
+                // Exact match in database
+                if (userAnswerLower.includes(strategyLower)) {
+                    foundStrategy = strategy;
+                    foundStrategyName = strategy.name;
+                    isPartialMatch = false;
+                    break;
+                }
+                
+                // Partial match - check if ANY word from strategy is in user answer
+                const strategyWords = strategyLower.split(/\s+|-/); // Split by space or dash
+                const userWords = userAnswerLower.split(/\s+|-/);
+                const matchedWords = strategyWords.filter(word => 
+                    userWords.some(uword => word === uword || word.includes(uword) || uword.includes(word))
+                );
+                
+                // Accept if at least 30% of words match or if first word matches
+                const wordMatchRatio = matchedWords.length / strategyWords.length;
+                if ((wordMatchRatio >= 0.3) || (strategyWords[0] && userWords.some(w => w === strategyWords[0]))) {
+                    foundStrategy = strategy;
+                    foundStrategyName = strategy.name;
+                    isPartialMatch = true; // This is a partial match
                     break;
                 }
             }
 
-            if (foundStrategy) {
-                score = 40;
-                feedback = `Răspunsul tău menționează ${foundStrategy}, dar ${correctAnswer.strategy} este mai eficient pentru această instanță specifică.`;
+            if (foundStrategyName) {
+                // Check if mentioned strategy is in comparison results
+                const mentionedResult = comparisonResults.find(r => r.strategyUsed === foundStrategyName);
+                
+                if (mentionedResult && mentionedResult === bestStrategy) {
+                    // User mentioned the fastest strategy
+                    if (isPartialMatch) {
+                        score = 75;
+                        feedback = `Bună! Ai identificat corect conceptul (${foundStrategyName}) care este cea mai rapidă (${bestStrategy.executionTime}ms), dar răspunsul complet este: ${correctAnswer.strategy}.`;
+                    } else {
+                        score = 100;
+                        feedback = `Excelent! ${foundStrategyName} este strategia cu cea mai bună performanță (${bestStrategy.executionTime}ms).`;
+                    }
+                } else if (mentionedResult) {
+                    // User mentioned a valid strategy, but not the fastest
+                    const timeDiff = (parseFloat(mentionedResult.executionTime) - parseFloat(bestStrategy.executionTime)).toFixed(2);
+                    score = 60;
+                    feedback = `Bună răspuns! ${foundStrategyName} este o strategie validă (${mentionedResult.executionTime}ms), dar ${correctAnswer.strategy} este mai rapid cu ${timeDiff}ms.`;
+                } else {
+                    // Strategy mentioned is not in comparison results
+                    score = 40;
+                    feedback = `Răspunsul tău menționează ${foundStrategyName}, dar ${correctAnswer.strategy} este mai rapid pentru această instanță specifică (${bestStrategy.executionTime}ms).`;
+                }
             } else {
                 score = 0;
-                feedback = `Răspunsul nu menționează o strategie validă sau este neclar.`;
+                feedback = `Răspunsul nu menționează o strategie validă. Strategii testate: ${comparisonResults.map(r => r.strategyUsed).join(', ')}.`;
             }
         }
     } else if (type === 'GameTheory') {
-        const correctNash = correctAnswer.rawEquilibria;
-        let userIsCorrect = false;
+        // Parse user input - supports multiple formats:
+        // 1. Full pairs: (0,1);(1,0) or (rând 2, coloana 2);(rând 3, coloana 1)
+        // 2. Single cell: (0,1) or (rând 3, coloana 1)
+        const parseNashAnswer = (answer) => {
+            // First normalize: remove Romanian words and extract numbers
+            let normalized = answer
+                .replace(/rând\s*/gi, '')
+                .replace(/coloana\s*/gi, '')
+                .replace(/row\s*/gi, '')
+                .replace(/col\s*/gi, '')
+                .toLowerCase();
 
-        if (correctNash.length === 0) {
-            userIsCorrect = userAnswerLower.includes('nu există') || userAnswerLower.includes('no nash');
-        } else {
-            const correctMatches = correctNash.filter(eq =>
-                userAnswerLower.includes(eq.toLowerCase().replace(/[()]/g, ''))
-            ).length;
-            if (correctMatches === correctNash.length) {
-                userIsCorrect = true;
+            // Try to match full pairs: (n,n);(n,n)
+            const fullPattern = /\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*[;,]\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)/g;
+            const fullMatches = [...normalized.matchAll(fullPattern)];
+            
+            if (fullMatches.length > 0) {
+                return fullMatches.map(match => ({
+                    p1Row: parseInt(match[1]),
+                    p1Col: parseInt(match[2]),
+                    p2Row: parseInt(match[3]),
+                    p2Col: parseInt(match[4]),
+                    original: match[0],
+                    isPartial: false
+                }));
             }
-        }
+            
+            // Try to match single cells: (n,n)
+            const singlePattern = /\(\s*(\d+)\s*,\s*(\d+)\s*\)/g;
+            const singleMatches = [...normalized.matchAll(singlePattern)];
+            
+            if (singleMatches.length > 0) {
+                return singleMatches.map(match => ({
+                    p1Row: parseInt(match[1]),
+                    p1Col: parseInt(match[2]),
+                    p2Row: null,
+                    p2Col: null,
+                    original: match[0],
+                    isPartial: true  // Mark as partial - single cell input
+                }));
+            }
+            
+            return null;
+        };
 
-        if (userIsCorrect) {
-            score = 100;
-            feedback = `Corect! Echilibrul Nash Pur este ${correctAnswer.strategy}.`;
-        } else if (correctNash.length > 0 && userAnswerLower.includes(correctNash[0].toLowerCase().replace(/[()]/g, ''))) {
-            score = 70;
-            feedback = `Aproape! Ai identificat un echilibru corect, dar există mai multe. Echilibrele corecte sunt ${correctAnswer.strategy}.`;
-        } else {
+        const userEquilibria = parseNashAnswer(userAnswer.trim());
+        const correctNash = correctAnswer.rawEquilibria || [];
+
+        // If no equilibria found in string format, try old format fallback
+        if (!userEquilibria || userEquilibria.length === 0) {
+            if (correctNash.length === 0 && (userAnswerLower.includes('nu există') || userAnswerLower.includes('no nash'))) {
+                score = 100;
+                feedback = `Corect! Nu există echilibru Nash pur pentru această matrice.`;
+            } else {
+                score = 0;
+                feedback = `Răspuns incorect. Folosește formatul: (rând, coloană) sau (rând, coloană);(rând, coloană). Exemplu: (3, 1) sau (2, 2);(3, 1)`;
+            }
+        } else if (correctNash.length === 0) {
             score = 0;
-            feedback = `Răspuns incorect. Verifică din nou Cel Mai Bun Răspuns al fiecărui jucător.`;
+            feedback = `Răspuns incorect. Nu există echilibru Nash pur pentru această matrice.`;
+        } else {
+            // Convert correctNash string format to parseable format for comparison
+            // correctNash format: "(Rând 2, Coloana 2); (Rând 3, Coloana 1)" or "(Row 2, Column 2); (Row 3, Column 1)"
+            const parseCorrectAnswer = (eq) => {
+                // Try Romanian format first
+                let match = eq.match(/[Rr]âmd\s+(\d+).*[Cc]oloana\s+(\d+)/i);
+                if (match) {
+                    return { row: parseInt(match[1]) - 1, col: parseInt(match[2]) - 1 }; // Convert 1-indexed to 0-indexed
+                }
+                // Try English format
+                match = eq.match(/[Rr]ow\s+(\d+).*[Cc]olumn\s+(\d+)/i);
+                if (match) {
+                    return { row: parseInt(match[1]) - 1, col: parseInt(match[2]) - 1 }; // Convert 1-indexed to 0-indexed
+                }
+                return null;
+            };
+
+            // Parse pairs from correctNash
+            const correctPairs = [];
+            if (correctNash.length > 0) {
+                // correctNash is array like ["(Rând 2, Coloana 2); (Rând 3, Coloana 1)"]
+                const pairString = correctNash[0];
+                const parts = pairString.split(';');
+                if (parts.length === 2) {
+                    const p1 = parseCorrectAnswer(parts[0]);
+                    const p2 = parseCorrectAnswer(parts[1]);
+                    if (p1 && p2) {
+                        correctPairs.push({ p1Row: p1.row, p1Col: p1.col, p2Row: p2.row, p2Col: p2.col });
+                    }
+                }
+            }
+
+            if (correctPairs.length === 0) {
+                // Fallback to old text matching
+                const correctMatches = correctNash.filter(eq =>
+                    userAnswerLower.includes(eq.toLowerCase().replace(/[()]/g, ''))
+                ).length;
+                
+                if (correctMatches === correctNash.length) {
+                    score = 100;
+                    feedback = `Corect! Echilibrul Nash Pur este ${correctAnswer.strategy}.`;
+                } else if (correctNash.length > 0 && userAnswerLower.includes(correctNash[0].toLowerCase().replace(/[()]/g, ''))) {
+                    score = 70;
+                    feedback = `Aproape! Ai identificat un echilibru corect, dar răspunsul complet este: ${correctAnswer.strategy}.`;
+                } else {
+                    score = 0;
+                    feedback = `Răspuns incorect. Echilibrele corecte sunt: ${correctAnswer.strategy}`;
+                }
+            } else {
+                // Check which user answers match correct equilibria
+                let matchedCount = 0;
+                const matchedEquilibria = [];
+                let hasPartialInput = userEquilibria.some(e => e.isPartial);
+
+                for (const userEq of userEquilibria) {
+                    for (const correctEq of correctPairs) {
+                        let isMatch = false;
+                        
+                        if (userEq.isPartial) {
+                            // User provided only (row, col) - check if it matches any part of the equilibrium
+                            // Convert user's input from 0-indexed to 1-indexed to match correctPairs
+                            const userRow1Indexed = userEq.p1Row + 1;
+                            const userCol1Indexed = userEq.p1Col + 1;
+                            const correctRow1Indexed = correctEq.p1Row + 1;
+                            const correctCol1Indexed = correctEq.p1Col + 1;
+                            const correctRow2_1Indexed = correctEq.p2Row + 1;
+                            const correctCol2_1Indexed = correctEq.p2Col + 1;
+                            
+                            isMatch = (userRow1Indexed === correctRow1Indexed && userCol1Indexed === correctCol1Indexed) ||
+                                     (userRow1Indexed === correctRow2_1Indexed && userCol1Indexed === correctCol2_1Indexed);
+                        } else {
+                            // User provided full pair - check exact match
+                            isMatch = (userEq.p1Row === correctEq.p1Row &&
+                                      userEq.p1Col === correctEq.p1Col &&
+                                      userEq.p2Row === correctEq.p2Row &&
+                                      userEq.p2Col === correctEq.p2Col);
+                        }
+                        
+                        if (isMatch) {
+                            matchedCount++;
+                            matchedEquilibria.push(userEq.original);
+                            break;
+                        }
+                    }
+                }
+
+                if (matchedCount === correctPairs.length && userEquilibria.length === correctPairs.length && !hasPartialInput) {
+                    // Perfect match - found all equilibria with full pairs
+                    score = 100;
+                    feedback = `Excelent! Ai găsit toate echilibrele Nash: ${matchedEquilibria.join(', ')}.`;
+                } else if (matchedCount === correctPairs.length && userEquilibria.length === correctPairs.length && hasPartialInput) {
+                    // User found all equilibria but with single cell inputs - give full credit
+                    score = 100;
+                    feedback = `Excelent! Ai găsit toate echilibrele Nash: ${matchedEquilibria.join(', ')}.`;
+                } else if (matchedCount > 0) {
+                    // Partial credit - found some equilibria or partial inputs
+                    const baseScore = Math.round((matchedCount / correctPairs.length) * 100);
+                    score = baseScore; // No penalty - credit proportional to what they found
+                    
+                    // Format correct answer without "Rând" and "Coloana"
+                    const formattedCorrectAnswer = correctAnswer.strategy
+                        .replace(/Rând\s+/gi, '')
+                        .replace(/Coloana\s+/gi, '');
+                    
+                    if (hasPartialInput && matchedCount > 0) {
+                        feedback = `Bun răspuns parțial! Ai identificat corect o parte din echilibru: ${matchedEquilibria.join(', ')}, dar răspunsul complet este: ${formattedCorrectAnswer}`;
+                    } else {
+                        feedback = `Parțial corect! Ai găsit ${matchedCount} din ${correctPairs.length} echilibre. Răspunsul complet: ${formattedCorrectAnswer}`;
+                    }
+                } else {
+                    score = 0;
+                    // Format correct answer without "Rând" and "Coloana"
+                    const formattedCorrectAnswer = correctAnswer.strategy
+                        .replace(/Rând\s+/gi, '')
+                        .replace(/Coloana\s+/gi, '');
+                    feedback = `Răspuns incorect. Echilibrele Nash corecte sunt: ${formattedCorrectAnswer}`;
+                }
+            }
         }
     }
 

@@ -1,4 +1,4 @@
-import { db } from '../services/database';
+import { db } from '../services/database.js';
 import { parseQuestionFromText } from './questionParser';
 import { determineOptimalSearchStrategy, determineNashEquilibrium } from './strategyDeterminer';
 import { parseCSPQuestion } from './cspSolver';

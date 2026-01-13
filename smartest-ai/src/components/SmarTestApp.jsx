@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { BookOpen, MessageSquare, Database, FileText, Sparkles, Cpu, Brain } from 'lucide-react';
-import { db } from '../services/database';
+import { db } from '../services/database.js';
 import { generateQuestion } from '../utils/questionGenerator';
 import { evaluateAnswer } from '../utils/answerEvaluator';
 import { generateChatResponse } from '../utils/chatAgent';

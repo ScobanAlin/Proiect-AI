@@ -1,4 +1,4 @@
-import { db } from '../services/database';
+import { db } from '../services/database.js';
 
 const CSP_TEMPLATES = [
     {

@@ -1,18 +1,75 @@
 import jsPDF from 'jspdf';
+import { db } from '../services/database.js';
 
 /**
  * Generate a test with specified types and difficulty
+ * NOW USES TEMPLATE SYSTEM - all configs fetched from database
  * @param {Array} questionTypes - Array of question types (e.g., ['search', 'csp', 'nash', 'adversarial'])
  * @param {string} difficulty - 'easy', 'medium', or 'hard'
  * @param {number} numQuestions - Number of questions to generate (default 10)
  * @returns {Object} { questions, answers }
  */
 export const generateTest = async (questionTypes, difficulty, numQuestions = 10) => {
-    const { generateQuestion } = await import('./questionGenerator');
+    // Fallback to legacy generateQuestion if template system not available
+    let generateQuestionFunc = null;
+
+    // Try to use template-based generation first
+    if (db.questionGenerator) {
+        generateQuestionFunc = async (type) => {
+            try {
+                return await db.generateQuestionFromTemplate(type, difficulty);
+            } catch (error) {
+                console.warn(`Template generation failed for ${type}, falling back to legacy:`, error);
+                const { generateQuestion } = await import('./questionGenerator');
+                return generateQuestion(type, getDifficultyConfig(difficulty));
+            }
+        };
+    } else {
+        // Fallback to legacy system
+        const { generateQuestion } = await import('./questionGenerator');
+        const diffConfig = getDifficultyConfig(difficulty);
+        generateQuestionFunc = (type) => generateQuestion(type, diffConfig);
+    }
 
     const questions = [];
     const answers = [];
 
+    // Generate questions
+    for (let i = 0; i < numQuestions; i++) {
+        const typeIndex = i % questionTypes.length;
+        const questionType = questionTypes[typeIndex];
+
+        try {
+            const question = await generateQuestionFunc(questionType);
+
+            questions.push({
+                number: i + 1,
+                type: questionType,
+                ...question
+            });
+
+            // Extract correct answer in the format the answer key expects
+            const correctAnswer = question.correctAnswer || question.correct_answer || {};
+            answers.push({
+                number: i + 1,
+                type: questionType,
+                question: question.text || question.question,
+                correctAnswer,
+                problem: question.problem || question.instance
+            });
+        } catch (error) {
+            console.error(`Error generating question ${i + 1}:`, error);
+        }
+    }
+
+    return { questions, answers };
+};
+
+/**
+ * Get difficulty configuration object for legacy compatibility
+ * This is the old system - configs now come from database
+ */
+function getDifficultyConfig(difficulty) {
     const difficultyConfig = {
         easy: {
             difficulty: 'easy',
@@ -46,38 +103,8 @@ export const generateTest = async (questionTypes, difficulty, numQuestions = 10)
         }
     };
 
-    const config = difficultyConfig[difficulty] || difficultyConfig.medium;
-
-    // Generate questions
-    for (let i = 0; i < numQuestions; i++) {
-        const typeIndex = i % questionTypes.length;
-        const questionType = questionTypes[typeIndex];
-
-        try {
-            const question = await new Promise((resolve) => {
-                generateQuestion(questionType, config).then(resolve);
-            });
-
-            questions.push({
-                number: i + 1,
-                type: questionType,
-                ...question
-            });
-
-            answers.push({
-                number: i + 1,
-                type: questionType,
-                question: question.text,
-                correctAnswer: question.correctAnswer,
-                problem: question.problem
-            });
-        } catch (error) {
-            console.error(`Error generating question ${i + 1}:`, error);
-        }
-    }
-
-    return { questions, answers };
-};
+    return difficultyConfig[difficulty] || difficultyConfig.medium;
+}
 
 /**
  * Generate PDF for questions

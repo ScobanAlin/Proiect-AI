@@ -1,4 +1,4 @@
-import { db } from '../services/database';
+import { db } from '../services/database.js';
 import { generateSearchInstance, generateNashInstance } from './questionGenerator';
 import { parseCSPQuestion } from './cspSolver';
 

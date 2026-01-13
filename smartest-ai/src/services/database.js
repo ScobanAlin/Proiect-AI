@@ -1,4 +1,7 @@
-import { seedDatabase } from './databaseSeed';
+import { seedDatabase } from './databaseSeed.js';
+import createTemplateDatabaseService from './TemplateDbService.js';
+import createTemplateQuestionGenerator from './TemplateQuestionGeneratorSimplified.js';
+import DATABASE_SEED from './databaseSeedTemplate.js';
 
 class DatabaseService {
     constructor() {
@@ -12,23 +15,22 @@ class DatabaseService {
             questionLog: []
         };
         this.initialized = false;
+        this.templateDb = null;
+        this.questionGenerator = null;
     }
 
     init() {
         if (this.initialized) return;
 
+        // Initialize legacy database system (for backward compatibility)
         const seedSQL = seedDatabase();
-
-        // Split by semicolons but keep multi-line statements together
         const statements = seedSQL
             .split(/;(?=\s*(?:INSERT|$))/)
             .map(s => s.trim())
             .filter(s => s.length > 0);
 
         statements.forEach(stmt => {
-            // Remove line breaks and extra spaces within the statement for easier parsing
             const cleanStmt = stmt.replace(/\s+/g, ' ');
-
             this._parseProblemTypes(cleanStmt);
             this._parseSearchStrategies(cleanStmt);
             this._parseInstanceConfigs(cleanStmt);
@@ -37,16 +39,44 @@ class DatabaseService {
             this._parseCSPConfigs(cleanStmt);
         });
 
+        // Initialize template system
+        this.initializeTemplateSystem();
+
         this.initialized = true;
 
-        // Debug log
-        console.log('Database initialized:', {
+        console.log('Database initialized (legacy + templates):', {
             problemTypes: this.db.problemTypes.length,
             strategies: this.db.searchStrategies.length,
             configs: this.db.instanceConfigs.length,
             cspConfigs: this.db.cspConfigs.length,
             rules: this.db.strategyRules.length
         });
+    }
+
+    /**
+     * Initialize the template-driven question system
+     */
+    initializeTemplateSystem() {
+        try {
+            // Create template service with seed data
+            this.templateDb = createTemplateDatabaseService(DATABASE_SEED);
+
+            // Create question generator
+            this.questionGenerator = createTemplateQuestionGenerator(this.templateDb);
+
+            console.log('Template system initialized successfully');
+        } catch (error) {
+            console.error('Error initializing template system:', error);
+        }
+    }
+
+    /**
+     * Query in-memory template database
+     * This is a simplified implementation - for production, use proper DB
+     */
+    _queryTemplateDb(sql, mode, params) {
+        // This method is no longer needed with the new service architecture
+        return null;
     }
 
     _parseProblemTypes(stmt) {
@@ -262,6 +292,38 @@ class DatabaseService {
             correct_answer: JSON.stringify(correctAnswer),
             generated_at: new Date().toISOString()
         });
+    }
+
+    /**
+     * Generate a question using the template system
+     * @param {string} questionType - 'search', 'nash', 'csp', 'adversarial'
+     * @param {string} difficulty - 'easy', 'medium', 'hard'
+     * @returns {Promise<Object>} Complete question object
+     */
+    async generateQuestionFromTemplate(questionType, difficulty = 'medium') {
+        if (!this.questionGenerator) {
+            throw new Error('Template system not initialized');
+        }
+        try {
+            return await this.questionGenerator.generateQuestion(questionType, difficulty);
+        } catch (error) {
+            console.error('Error generating question from template:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get template database service (for advanced usage)
+     */
+    getTemplateService() {
+        return this.templateDb;
+    }
+
+    /**
+     * Get question generator service (for advanced usage)
+     */
+    getQuestionGenerator() {
+        return this.questionGenerator;
     }
 }
 

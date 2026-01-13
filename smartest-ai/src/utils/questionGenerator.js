@@ -1,7 +1,7 @@
-import { db } from '../services/database';
-import { runAlgorithmComparison, selectBestStrategy, runCSPComparison, generateAdversarialInstance, solveMinimaxAlphaBeta } from './algorithmSolvers';
-import { determineNashEquilibrium } from './strategyDeterminer';
-import { generateRandomCSPInstance } from './cspGenerator';
+import { db } from '../services/database.js';
+import { runAlgorithmComparison, selectBestStrategy, runCSPComparison, generateAdversarialInstance, solveMinimaxAlphaBeta } from './algorithmSolvers.js';
+import { determineNashEquilibrium } from './strategyDeterminer.js';
+import { generateRandomCSPInstance } from './cspGenerator.js';
 
 export const generateSearchInstance = (problemName, difficultyConfig = {}) => {
     const problemType = db.getProblemTypeByName(problemName);

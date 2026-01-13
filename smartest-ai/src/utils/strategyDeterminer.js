@@ -1,4 +1,4 @@
-import { db } from '../services/database';
+import { db } from '../services/database.js';
 
 export const determineOptimalSearchStrategy = (problemName, instance) => {
     const problemType = db.getProblemTypeByName(problemName);

@@ -1,4 +1,4 @@
-import { db } from '../services/database';
+import { db } from '../services/database.js';
 
 export const evaluateAnswer = (question, userAnswer) => {
     const { type, correctAnswer, comparisonResults, bestStrategy } = question;

@@ -1,1386 +1,279 @@
-import React, { useState, useEffect } from 'react';
-import { BookOpen, MessageSquare, CheckCircle, AlertCircle, Send, Sparkles, FileText, RotateCcw, Box, Database, Zap } from 'lucide-react';
-import { runAlgorithmComparison, selectBestStrategy } from '../utils/algorithmSolvers';
+import React, { useState } from 'react';
+import { BookOpen, MessageSquare, Database, FileText, Sparkles, Cpu, Brain } from 'lucide-react';
+import { db } from '../services/database';
+import { generateQuestion } from '../utils/questionGenerator';
+import { evaluateAnswer } from '../utils/answerEvaluator';
+import { generateChatResponse } from '../utils/chatAgent';
+import QuestionGenerator from './QuestionGenerator';
+import ChatInterface from './ChatInterface';
+import TestGenerator from './TestGenerator';
 
 // ============================================================================
-// DATABASE INITIALIZATION AND SCHEMA
+// REACT COMPONENT - MODERN DESIGN
 // ============================================================================
-
-const initDatabase = () => {
-    const SQL = `
-    -- Problem Types Table
-    CREATE TABLE IF NOT EXISTS problem_types (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      description TEXT NOT NULL,
-      category TEXT NOT NULL CHECK(category IN ('Search', 'GameTheory'))
-    );
-
-    -- Search Strategies Table
-    CREATE TABLE IF NOT EXISTS search_strategies (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      type TEXT NOT NULL CHECK(type IN ('Uninformed', 'Informed')),
-      description TEXT NOT NULL
-    );
-
-    -- Problem Instances Configuration
-    CREATE TABLE IF NOT EXISTS instance_configs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      problem_type_id INTEGER NOT NULL,
-      min_size INTEGER NOT NULL,
-      max_size INTEGER NOT NULL,
-      size_param_name TEXT NOT NULL,
-      additional_params TEXT, -- JSON string for extra parameters
-      FOREIGN KEY (problem_type_id) REFERENCES problem_types(id)
-    );
-
-    -- Strategy Mapping Rules
-    CREATE TABLE IF NOT EXISTS strategy_rules (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      problem_type_id INTEGER NOT NULL,
-      strategy_id INTEGER,
-      min_size INTEGER,
-      max_size INTEGER,
-      condition_json TEXT, -- JSON for complex conditions (density, pegs, etc)
-      reason TEXT NOT NULL,
-      priority INTEGER DEFAULT 0, -- Higher priority rules checked first
-      FOREIGN KEY (problem_type_id) REFERENCES problem_types(id),
-      FOREIGN KEY (strategy_id) REFERENCES search_strategies(id)
-    );
-
-    -- Game Theory Configurations
-    CREATE TABLE IF NOT EXISTS game_configs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      description TEXT NOT NULL,
-      min_matrix_size INTEGER DEFAULT 2,
-      max_matrix_size INTEGER DEFAULT 3,
-      min_payoff INTEGER DEFAULT 0,
-      max_payoff INTEGER DEFAULT 5
-    );
-
-    -- Generated Questions Log (optional, for tracking)
-    CREATE TABLE IF NOT EXISTS question_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      problem_type_id INTEGER,
-      instance_data TEXT, -- JSON
-      correct_answer TEXT,
-      generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (problem_type_id) REFERENCES problem_types(id)
-    );
-  `;
-
-    return SQL;
-};
-
-const seedDatabase = () => {
-    return `
-    -- Insert Problem Types
-    INSERT OR IGNORE INTO problem_types (name, description, category) VALUES
-      ('N-Queens', 'Plasarea a N regine pe o tablă NxN', 'Search'),
-      ('Generalized Hanoi', 'Mutarea discurilor între tije', 'Search'),
-      ('Graph Coloring', 'Colorarea nodurilor unui graf', 'Search'),
-      ('Knight''s Tour', 'Mutarea unui cal pe tabla de șah', 'Search'),
-      ('Nash Equilibrium', 'Găsirea Echilibrului Nash Pur într-un joc în formă normală', 'GameTheory');
-
-    -- Insert Search Strategies
-    INSERT OR IGNORE INTO search_strategies (name, type, description) VALUES
-      ('Random', 'Uninformed', 'Alegere aleatorie a stărilor următoare'),
-      ('BFS', 'Uninformed', 'Breadth-First Search - explorare pe nivel'),
-      ('Uniform Cost', 'Uninformed', 'Expandare după cost minim cumulat'),
-      ('DFS', 'Uninformed', 'Depth-First Search - explorare în adâncime'),
-      ('Iterative Deepening', 'Uninformed', 'DFS iterativ cu limite crescânde'),
-      ('Backtracking', 'Uninformed', 'DFS cu pruning pentru CSP'),
-      ('Bidirectional', 'Uninformed', 'Căutare simultană din start și goal'),
-      ('Greedy Best-First', 'Informed', 'Expandare după h(n) minim'),
-      ('Hill Climbing', 'Informed', 'Local search, acceptă doar îmbunătățiri'),
-      ('Simulated Annealing', 'Informed', 'Local search cu acceptare probabilistică'),
-      ('Beam Search', 'Informed', 'BFS limitat la k candidați'),
-      ('A*', 'Informed', 'Expandare după f(n) = g(n) + h(n)'),
-      ('IDA*', 'Informed', 'A* iterativ cu memorie redusă');
-
-    -- Insert Instance Configs
-    INSERT OR IGNORE INTO instance_configs (problem_type_id, min_size, max_size, size_param_name, additional_params) VALUES
-      (1, 4, 11, 'n', NULL), -- N-Queens
-      (2, 3, 7, 'discs', '{"pegs_min": 3, "pegs_max": 4}'), -- Hanoi
-      (3, 5, 20, 'nodes', '{"colors_min": 3, "colors_max": 5, "density_options": ["dens", "rar"]}'), -- Graph Coloring
-      (4, 5, 8, 'size', NULL); -- Knight's Tour
-
-    -- Insert Strategy Rules for N-Queens
-    INSERT OR IGNORE INTO strategy_rules (problem_type_id, strategy_id, min_size, max_size, condition_json, reason, priority) VALUES
-      (1, 6, 0, 6, NULL, 'Pentru N≤6 (dimensiune mică), Backtracking simplu este optim.', 3),
-      (1, 5, 7, 10, NULL, 'Pentru N între 7-10 (dimensiune medie), Iterative Deepening combină avantajele DFS/BFS.', 2),
-      (1, 9, 11, 999, NULL, 'Pentru N>10 (dimensiune mare), metodele uninformed sunt lente. Hill Climbing (local search) este rapid.', 1);
-
-    -- Insert Strategy Rules for Generalized Hanoi
-    INSERT OR IGNORE INTO strategy_rules (problem_type_id, strategy_id, min_size, max_size, condition_json, reason, priority) VALUES
-      (2, 4, 0, 10, '{"pegs": 3}', 'Pentru ≤10 discuri și 3 tije, DFS urmărește soluția recursivă optimă.', 4),
-      (2, 13, 11, 999, '{"pegs": 3}', 'Pentru >10 discuri și 3 tije, IDA* reduce memoria față de A* clasic, menținând optimalitatea.', 3),
-      (2, 2, 0, 8, '{"pegs": [4]}', 'Pentru ≤8 discuri și 4 tije, BFS garantează soluția optimă, spațiul fiind controlabil.', 2),
-      (2, 12, 9, 999, '{"pegs": [4]}', 'Pentru >8 discuri și 4 tije (dimensiune mare), A* cu euristică Frame-Stewart oferă cel mai bun compromis.', 1);
-
-    -- Insert Strategy Rules for Graph Coloring
-    INSERT OR IGNORE INTO strategy_rules (problem_type_id, strategy_id, min_size, max_size, condition_json, reason, priority) VALUES
-      (3, 6, 0, 10, NULL, 'Graf mic, Backtracking explorează sistematic, pruning rapid.', 3),
-      (3, 10, 16, 999, '{"density": "dens"}', 'Graf mare și dens. Simulated Annealing scapă de minimele locale și explorează spațiul vast eficient.', 2),
-      (3, 8, 11, 999, NULL, 'Graf mediu. Greedy cu euristica "cel mai constrâns nod primul" găsește rapid soluții.', 1);
-
-    -- Insert Strategy Rules for Knight's Tour
-    INSERT OR IGNORE INTO strategy_rules (problem_type_id, strategy_id, min_size, max_size, condition_json, reason, priority) VALUES
-      (4, 6, 0, 6, NULL, 'Tablă mică. Backtracking cu pruning geometric găsește soluții rapid.', 2),
-      (4, 8, 7, 999, NULL, 'Tablă medie/mare. Greedy cu euristica Warnsdorff rezolvă în timp aproape liniar.', 1);
-
-    -- Insert Game Theory Config
-    INSERT OR IGNORE INTO game_configs (name, description, min_matrix_size, max_matrix_size, min_payoff, max_payoff) VALUES
-      ('Standard Nash Game', 'Joc în formă normală 2x2 sau 3x3', 2, 3, 0, 5);
-  `;
-};
-
-// ============================================================================
-// IN-MEMORY DATABASE SERVICE
-// ============================================================================
-
-class DatabaseService {
-    constructor() {
-        this.db = {
-            problemTypes: [],
-            searchStrategies: [],
-            instanceConfigs: [],
-            strategyRules: [],
-            gameConfigs: [],
-            questionLog: []
-        };
-        this.initialized = false;
-    }
-
-    init() {
-        if (this.initialized) return;
-
-        // Parse and execute seed data
-        const seedSQL = seedDatabase();
-        const statements = seedSQL.split(';').filter(s => s.trim());
-
-        statements.forEach(stmt => {
-            if (stmt.includes('INSERT') && stmt.includes('problem_types')) {
-                // Găsește TOATE grupurile de tip ('name','desc','category')
-                const matches = [...stmt.matchAll(/\('([^']+)',\s*'([^']+)',\s*'([^']+)'\)/g)];
-                matches.forEach((m) => {
-                    const [, name, description, category] = m;
-                    this.db.problemTypes.push({
-                        id: this.db.problemTypes.length + 1,
-                        name,
-                        description,
-                        category,
-                    });
-                });
-            }
-
-            if (stmt.includes('INSERT') && stmt.includes('search_strategies')) {
-                const matches = stmt.match(/\('([^']+)',\s*'([^']+)',\s*'([^']+)'\)/g);
-
-                matches?.forEach(match => {
-                    const [, name, type, description] =
-                        match.match(/\('([^']+)',\s*'([^']+)',\s*'([^']+)'\)/);
-
-                    this.db.searchStrategies.push({
-                        id: this.db.searchStrategies.length + 1,
-                        name,
-                        type,
-                        description
-                    });
-                });
-            }
-
-            if (stmt.includes('INSERT') && stmt.includes('instance_configs')) {
-                const matches = stmt.match(/\((\d+),\s*(\d+),\s*(\d+),\s*'([^']+)',\s*(NULL|'[^']*')\)/g);
-                matches?.forEach(match => {
-                    const [, problemTypeId, minSize, maxSize, sizeParamName, additionalParams] =
-                        match.match(/\((\d+),\s*(\d+),\s*(\d+),\s*'([^']+)',\s*(NULL|'[^']*')\)/);
-
-                    this.db.instanceConfigs.push({
-                        id: this.db.instanceConfigs.length + 1,
-                        problem_type_id: parseInt(problemTypeId),
-                        min_size: parseInt(minSize),
-                        max_size: parseInt(maxSize),
-                        size_param_name: sizeParamName,
-                        additional_params: additionalParams === 'NULL' ? null : JSON.parse(additionalParams.replace(/^'|'$/g, ''))
-                    });
-                });
-            }
-
-            if (stmt.includes('INSERT') && stmt.includes('strategy_rules')) {
-                const matches = stmt.match(/\((\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(NULL|'[^']*'),\s*'([^']+)',\s*(\d+)\)/g);
-                matches?.forEach(match => {
-                    const [, problemTypeId, strategyId, minSize, maxSize, conditionJson, reason, priority] =
-                        match.match(/\((\d+),\s*(\d+),\s*(\d+),\s*(\d+),\s*(NULL|'[^']*'),\s*'([^']+)',\s*(\d+)\)/);
-
-                    this.db.strategyRules.push({
-                        id: this.db.strategyRules.length + 1,
-                        problem_type_id: parseInt(problemTypeId),
-                        strategy_id: parseInt(strategyId),
-                        min_size: parseInt(minSize),
-                        max_size: parseInt(maxSize),
-                        condition_json: conditionJson === 'NULL' ? null : JSON.parse(conditionJson.replace(/^'|'$/g, '')),
-                        reason: reason,
-                        priority: parseInt(priority)
-                    });
-                });
-            }
-
-            if (stmt.includes('INSERT') && stmt.includes('game_configs')) {
-                const match = stmt.match(/VALUES\s*\('([^']+)',\s*'([^']+)',\s*(\d+),\s*(\d+),\s*(\d+),\s*(\d+)\)/);
-                if (match) {
-                    const [, name, description, minMatrix, maxMatrix, minPayoff, maxPayoff] = match;
-                    this.db.gameConfigs.push({
-                        id: 1,
-                        name,
-                        description,
-                        min_matrix_size: parseInt(minMatrix),
-                        max_matrix_size: parseInt(maxMatrix),
-                        min_payoff: parseInt(minPayoff),
-                        max_payoff: parseInt(maxPayoff)
-                    });
-                }
-            }
-        });
-
-        this.initialized = true;
-    }
-
-    // Query methods
-    getProblemTypeByName(name) {
-        return this.db.problemTypes.find(pt => pt.name === name);
-    }
-
-    getProblemTypeById(id) {
-        return this.db.problemTypes.find(pt => pt.id === id);
-    }
-
-    getAllProblemTypes(category = null) {
-        if (category) {
-            return this.db.problemTypes.filter(pt => pt.category === category);
-        }
-        return this.db.problemTypes;
-    }
-
-    getStrategyById(id) {
-        return this.db.searchStrategies.find(s => s.id === id);
-    }
-
-    getInstanceConfig(problemTypeId) {
-        return this.db.instanceConfigs.find(ic => ic.problem_type_id === problemTypeId);
-    }
-
-    getStrategyRules(problemTypeId, size, additionalConditions = {}) {
-        let rules = this.db.strategyRules
-            .filter(r => r.problem_type_id === problemTypeId)
-            .filter(r => size >= r.min_size && size <= r.max_size);
-
-        // Filter by additional conditions
-        if (Object.keys(additionalConditions).length > 0) {
-            rules = rules.filter(r => {
-                if (!r.condition_json) return true;
-
-                for (const [key, value] of Object.entries(additionalConditions)) {
-                    if (r.condition_json[key] !== undefined) {
-                        if (Array.isArray(r.condition_json[key])) {
-                            if (!r.condition_json[key].includes(value)) return false;
-                        } else {
-                            if (r.condition_json[key] !== value) return false;
-                        }
-                    }
-                }
-                return true;
-            });
-        }
-
-        // Sort by priority (highest first)
-        rules.sort((a, b) => b.priority - a.priority);
-        return rules;
-    }
-
-    getGameConfig() {
-        return this.db.gameConfigs[0];
-    }
-
-    logQuestion(problemTypeId, instanceData, correctAnswer) {
-        this.db.questionLog.push({
-            id: this.db.questionLog.length + 1,
-            problem_type_id: problemTypeId,
-            instance_data: JSON.stringify(instanceData),
-            correct_answer: JSON.stringify(correctAnswer),
-            generated_at: new Date().toISOString()
-        });
-    }
-}
-
-// Initialize database
-const db = new DatabaseService();
-db.init();
-
-// ============================================================================
-// CHAT AGENT - PARSER LOGIC
-// ============================================================================
-
-const parseSearchProblems = (text) => {
-    const problems = [];
-    const lines = text.split('\n').filter(line => line.trim());
-
-    for (const line of lines) {
-        // 1. N-Queens
-        if (line.toLowerCase().includes('queens') || line.toLowerCase().includes('regine')) {
-            const nMatch = line.match(/n\s*=\s*(\d+)/i) || line.match(/(\d+)\s*regine/i) || line.match(/tablă\s*(\d+)x\s*\d+/i);
-            if (nMatch) {
-                const n = parseInt(nMatch[1]);
-                problems.push({
-                    name: 'N-Queens',
-                    instance: { text: `N=${n} (tablă ${n}x${n})`, n: n, size: n }
-                });
-            }
-        }
-
-        // 2. Generalized Hanoi
-        if (line.toLowerCase().includes('hanoi') || line.toLowerCase().includes('discuri')) {
-            const discMatch = line.match(/(\d+)\s*discuri/i);
-            const pegMatch = line.match(/(\d+)\s*tije/i);
-            if (discMatch) {
-                const discs = parseInt(discMatch[1]);
-                const pegs = pegMatch ? parseInt(pegMatch[1]) : 3;
-                problems.push({
-                    name: 'Generalized Hanoi',
-                    instance: { text: `${discs} discuri, ${pegs} tije`, discs, pegs, size: discs }
-                });
-            }
-        }
-
-        // 3. Graph Coloring
-        if (line.toLowerCase().includes('graph') || line.toLowerCase().includes('graf') || line.toLowerCase().includes('colorare')) {
-            const nodeMatch = line.match(/(\d+)\s*noduri/i);
-            const edgeMatch = line.match(/(\d+)\s*muchii/i);
-            const colorMatch = line.match(/(\d+)\s*culori/i);
-            const isDenseUser = line.toLowerCase().includes('dens');
-
-            if (nodeMatch) {
-                const nodes = parseInt(nodeMatch[1]);
-                const maxEdges = nodes * (nodes - 1) / 2;
-                let edges = edgeMatch ? parseInt(edgeMatch[1]) : null;
-                const colors = colorMatch ? parseInt(colorMatch[1]) : 3;
-
-                if (edges === null || edges < nodes - 1 || edges > maxEdges) {
-                    const generatedInstance = generateSearchInstance('Graph Coloring');
-                    edges = generatedInstance.edges;
-                }
-
-                const densityRatio = edges / maxEdges;
-                let finalDensity;
-                if (densityRatio >= 0.6) {
-                    finalDensity = 'dens';
-                } else if (densityRatio <= 0.3) {
-                    finalDensity = 'rar';
-                } else {
-                    finalDensity = 'mediu';
-                }
-
-                problems.push({
-                    name: 'Graph Coloring',
-                    instance: {
-                        text: `Graf ${finalDensity} cu ${nodes} noduri, ${edges} muchii, ${colors} culori`,
-                        nodes: nodes,
-                        edges: edges,
-                        colors: colors,
-                        density: finalDensity,
-                        size: nodes
-                    }
-                });
-            }
-        }
-
-        // 4. Knight's Tour
-        if (line.toLowerCase().includes('knight') || line.toLowerCase().includes('cal')) {
-            const sizeMatch = line.match(/(\d+)\s*x\s*(\d+)/i) || line.match(/tablă\s*(\d+)/i);
-            if (sizeMatch) {
-                const size = parseInt(sizeMatch[1]);
-                problems.push({
-                    name: "Knight's Tour",
-                    instance: { text: `Tablă ${size}x${size}`, size }
-                });
-            }
-        }
-    }
-
-    // Generate random instance if generic question
-    if (problems.length === 0 && (text.toLowerCase().includes('strategie') || text.toLowerCase().includes('backtracking') || text.toLowerCase().includes('a*'))) {
-        const searchProblems = db.getAllProblemTypes('Search');
-        const randomProblem = searchProblems[Math.floor(Math.random() * searchProblems.length)];
-        const instance = generateSearchInstance(randomProblem.name);
-        problems.push({
-            name: randomProblem.name,
-            instance: instance
-        });
-    }
-
-    return problems;
-};
-
-const extractMatrixFromText = (text) => {
-    const payoffRegex = /\(\s*(-?\d+)\s*,\s*(-?\d+)\s*\)/g;
-
-    // 1️⃣ Split în rânduri prin ;
-    let rowsRaw = text.split(";");
-
-    // 2️⃣ Dacă nu există ;, split prin newline
-    if (rowsRaw.length === 1) {
-        rowsRaw = text.split("\n");
-    }
-
-    // 3️⃣ Curățare
-    rowsRaw = rowsRaw
-        .map(r => r.trim())
-        .filter(r => r.length > 0);
-
-    const matrix = [];
-
-    for (const row of rowsRaw) {
-        const matches = [...row.matchAll(payoffRegex)];
-        if (matches.length === 0) continue;
-
-        const parsedRow = matches.map(m => [
-            parseInt(m[1], 10),
-            parseInt(m[2], 10)
-        ]);
-
-        matrix.push(parsedRow);
-    }
-
-    if (matrix.length === 0) return null;
-
-    // 4️⃣ Verificăm consistența rândurilor
-    const colCount = matrix[0].length;
-    if (!matrix.every(r => r.length === colCount)) {
-        console.warn("Matrice inconsistentă — diferite număr de coloane pe rând.");
-        return null;
-    }
-
-    return matrix;
-};
-
-
-
-const parseQuestionFromText = (text) => {
-    const problems = [];
-    const lowerText = text.toLowerCase();
-
-    if (lowerText.includes('nash') || lowerText.includes('echilibru') || lowerText.includes('matrice')) {
-
-        const parsedMatrix = extractMatrixFromText(text);
-
-        if (parsedMatrix) {
-            const rows = parsedMatrix.length;
-            const cols = parsedMatrix[0].length;
-
-            problems.push({
-                name: 'Nash Equilibrium',
-                instance: {
-                    matrix: parsedMatrix,
-                    rows,
-                    cols,
-                    text: `Joc parsat ${rows}x${cols}`,
-                    visual: parsedMatrix
-                        .map(r => r.map(c => `(${c[0]}, ${c[1]})`).join(" | "))
-                        .join(" ;\n")
-                }
-            });
-
-            return problems;
-        }
-
-        // Fall back to random example
-        const exampleInstance = generateNashInstance();
-        problems.push({
-            name: 'Nash Equilibrium',
-            instance: exampleInstance
-        });
-
-        return problems;
-    }
-
-    // search problems as before
-    const searchProblems = parseSearchProblems(text);
-    problems.push(...searchProblems);
-    return problems;
-};
-
-
-const generateChatResponse = (question) => {
-    const parsedProblems = parseQuestionFromText(question);
-
-    if (parsedProblems.length > 0) {
-        const answers = parsedProblems.map(p => {
-            if (p.name === 'Nash Equilibrium') {
-                const answer = determineNashEquilibrium(p.instance.matrix);
-                const problemVisual = p.instance.text.startsWith('Joc parsată')
-                    ? `Matricea analizată:\n${p.instance.visual}`
-                    : `Exemplu (generat):\n${p.instance.visual}`;
-
-                return `**${p.name}**:\n${problemVisual}\n\n**Răspuns: ${answer.strategy}**\n\n*Justificare*: ${answer.reason}`;
-            } else {
-                const answer = determineOptimalSearchStrategy(p.name, p.instance);
-                return `**${p.name}** (${p.instance.text}):\n\n**Strategie optimă: ${answer.strategy}**\n\n*Justificare*: ${answer.reason}`;
-            }
-        });
-        return answers.join('\n\n---\n\n');
-    }
-
-    const qLower = question.toLowerCase();
-
-    if (qLower.includes('uninformed') || qLower.includes('neinformat')) {
-        return `**Strategii Uninformed (fără heuristici)**\n\nAceste strategii nu disting între stări:\n\n• **BFS**: Găsește cel mai scurt drum (pentru costuri unitare)\n• **Iterative Deepening**: DFS cu limite, memorie redusă + completitudine\n• **Backtracking**: DFS cu pruning, elimină ramuri invalide (pentru CSP)\n\n**Când se folosesc**: Probleme mici/medii, lipsa heuristicilor bune.`;
-    }
-    if (qLower.includes('informed') || qLower.includes('heuristic')) {
-        return `**Strategii Informed (cu heuristici)**\n\nFolosesc cunoștințe despre domeniu pentru a ghida căutarea:\n\n• **Greedy Best-First**: Rapid, neoptim, alege starea cu h(n) minim\n• **Simulated Annealing**: Scapă de minimele locale prin acceptarea probabilistică a soluțiilor mai slabe\n• **A***: Optim dacă h admisibilă, f(n) = g(n) + h(n)\n\n**Când se folosesc**: Probleme mari unde uninformed e prea lent, existența heuristicilor bune.`;
-    }
-    if (qLower.includes('a*') || qLower.includes('a star')) {
-        return `**A* Search**\n\nA* este optim dacă euristica h(n) este admisibilă (h(n) ≤ cost real până la goal).\n\n**Formula**: f(n) = g(n) + h(n)\n- g(n) = cost de la start la n\n- h(n) = estimare cost de la n la goal\n\n**Avantaje**: Găsește soluția optimă, eficient cu euristică bună\n**Dezavantaje**: Memorie mare pentru probleme complexe`;
-    }
-    if (qLower.includes('backtracking')) {
-        return `**Backtracking**\n\nBacktracking este un DFS cu pruning (eliminare timpurie a ramurilor invalide).\n\n**Când e optim**: Probleme CSP mici, precum N-Queens (N≤8) sau Sudoku.\n\n**Avantaje**: Elimină rapid căi imposibile, memorie redusă\n**Exemplu clasic**: Plasarea reginelor pe tablă, verificând conflictele înainte de a continua.`;
-    }
-    if (qLower.includes('nash equilibrium') || qLower.includes('echilibru nash')) {
-        return `**Echilibrul Nash Pur**\n\n**Definiție**: O pereche de strategii (σ₁, σ₂) este un Echilibru Nash Pur dacă strategia fiecărui jucător este un **Cel Mai Bun Răspuns** (Best Response) la strategia celuilalt.\n\nP₁ joacă σ₁ maximizând utilitatea sa, presupunând că P₂ joacă σ₂. P₂ face același lucru.\n\n**Cum se găsește**:\n1. Pentru fiecare coloană, găsește cea mai bună strategie a P1\n2. Pentru fiecare rând, găsește cea mai bună strategie a P2\n3. Echilibrele sunt celulele unde ambele răspunsuri se intersectează`;
-    }
-
-    if (qLower.includes('database') || qLower.includes('baza de date')) {
-        return `**Database Status** 📊\n\nBaza de date conține:\n• ${db.db.problemTypes.length} tipuri de probleme\n• ${db.db.searchStrategies.length} strategii de căutare (${db.db.searchStrategies.filter(s => s.type === 'Uninformed').length} Uninformed + ${db.db.searchStrategies.filter(s => s.type === 'Informed').length} Informed)\n• ${db.db.strategyRules.length} reguli de mapare\n• ${db.db.questionLog.length} întrebări generate\n\nÎntreabă despre orice strategie sau problemă specifică!`;
-    }
-
-    return `**Sunt gata să te ajut!** 🤖\n\nÎntreabă-mă despre:\n• Strategii de căutare (A*, Backtracking, Greedy, BFS, DFS)\n• Probleme specifice (N-Queens, Hanoi, Graph Coloring, Knight's Tour)\n• Echilibru Nash (inclusiv parsarea unei matrici)\n\n**Exemple de întrebări**:\n- "N-Queens cu N=10?"\n- "Hanoi 12 discuri 4 tije?"\n- "Nash Equilibrium (4,5) | (5,5) | (3,4) | (4,3)"\n- "Ce este A*?"`;
-};
-
-// ============================================================================
-// API SERVICE (Using Database)
-// ============================================================================
-
-const generateSearchInstance = (problemName) => {
-    const problemType = db.getProblemTypeByName(problemName);
-    if (!problemType) return { text: 'Unknown problem', size: 5 };
-
-    const config = db.getInstanceConfig(problemType.id);
-    if (!config) return { text: 'No config found', size: 5 };
-
-    const size = Math.floor(Math.random() * (config.max_size - config.min_size + 1)) + config.min_size;
-
-    switch (problemName) {
-        case 'N-Queens':
-            return {
-                text: `N=${size} (tablă ${size}x${size})`,
-                n: size,
-                size: size
-            };
-
-        case 'Generalized Hanoi': {
-            const additionalParams = config.additional_params;
-            const pegs = Math.floor(Math.random() * (additionalParams.pegs_max - additionalParams.pegs_min + 1)) + additionalParams.pegs_min;
-            return {
-                text: `${size} discuri, ${pegs} tije`,
-                discs: size,
-                pegs: pegs,
-                size: size
-            };
-        }
-
-        case 'Graph Coloring': {
-            const additionalParams = config.additional_params;
-            const colors = Math.floor(Math.random() * (additionalParams.colors_max - additionalParams.colors_min + 1)) + additionalParams.colors_min;
-            const density = additionalParams.density_options[Math.floor(Math.random() * additionalParams.density_options.length)];
-
-            const maxEdges = size * (size - 1) / 2;
-            let edges;
-            if (density === 'dens') {
-                edges = Math.floor(maxEdges * (0.4 + Math.random() * 0.5));
-            } else {
-                edges = Math.floor(maxEdges * (0.1 + Math.random() * 0.2));
-            }
-            edges = Math.max(edges, size - 1);
-
-            return {
-                text: `Graf ${density} cu ${size} noduri, ${edges} muchii, ${colors} culori`,
-                nodes: size,
-                edges: edges,
-                colors: colors,
-                density: density,
-                size: size
-            };
-        }
-
-        case "Knight's Tour":
-            return {
-                text: `Tablă ${size}x${size}`,
-                size: size
-            };
-
-        default:
-            return { text: 'Instanță standard', size: 5 };
-    }
-};
-
-const determineOptimalSearchStrategy = (problemName, instance) => {
-    const problemType = db.getProblemTypeByName(problemName);
-    if (!problemType) return { strategy: 'Unknown', reason: 'Problem not found', type: 'Search' };
-
-    const size = instance.size || 5;
-    const additionalConditions = {};
-
-    // Build additional conditions based on problem type
-    if (problemName === 'Generalized Hanoi' && instance.pegs) {
-        additionalConditions.pegs = instance.pegs;
-    }
-    if (problemName === 'Graph Coloring' && instance.density) {
-        additionalConditions.density = instance.density;
-    }
-
-    const rules = db.getStrategyRules(problemType.id, size, additionalConditions);
-
-    if (rules.length === 0) {
-        return { strategy: 'BFS', reason: 'No specific rule found, using default BFS.', type: 'Search' };
-    }
-
-    const selectedRule = rules[0]; // Highest priority rule
-    const strategy = db.getStrategyById(selectedRule.strategy_id);
-
-    return {
-        strategy: strategy.name,
-        reason: selectedRule.reason,
-        type: 'Search'
-    };
-};
-
-const generateNashInstance = () => {
-    const config = db.getGameConfig();
-
-    const rows = Math.floor(Math.random() * 4) + 2; // 2–5
-    const cols = Math.floor(Math.random() * 4) + 2; // 2–5
-
-    const matrix = Array(rows).fill(0).map(() =>
-        Array(cols).fill(0).map(() => [
-            Math.floor(Math.random() * (config.max_payoff + 1)),
-            Math.floor(Math.random() * (config.max_payoff + 1))
-        ])
-    );
-
-    // FORMAT CU ;
-    const visual = matrix
-        .map(r => r.map(c => `(${c[0]}, ${c[1]})`).join(" | "))
-        .join(" ;\n");
-
-    return {
-        matrix,
-        rows,
-        cols,
-        text: `Joc în formă normală ${rows}x${cols}`,
-        visual
-    };
-};
-
-
-
-const determineNashEquilibrium = (matrix) => {
-    const rows = matrix.length;
-    const cols = matrix[0].length;
-    const equilibria = [];
-
-    // arrays of arrays: pe fiecare col/rând poți avea mai multe best responses
-    const player1BestResponses = Array.from({ length: cols }, () => []);
-    const player2BestResponses = Array.from({ length: rows }, () => []);
-
-    // Best responses for Player 1 (column-based)
-    for (let j = 0; j < cols; j++) {
-        let maxPayoff = -Infinity;
-
-        for (let i = 0; i < rows; i++) {
-            const payoff = matrix[i][j][0];
-
-            if (payoff > maxPayoff) {
-                maxPayoff = payoff;
-                player1BestResponses[j] = [i]; // reset
-            } else if (payoff === maxPayoff) {
-                player1BestResponses[j].push(i); // keep ties
-            }
-        }
-    }
-
-    // Best responses for Player 2 (row-based)
-    for (let i = 0; i < rows; i++) {
-        let maxPayoff = -Infinity;
-
-        for (let j = 0; j < cols; j++) {
-            const payoff = matrix[i][j][1];
-
-            if (payoff > maxPayoff) {
-                maxPayoff = payoff;
-                player2BestResponses[i] = [j]; // reset
-            } else if (payoff === maxPayoff) {
-                player2BestResponses[i].push(j); // keep ties
-            }
-        }
-    }
-
-    // intersections = Nash equilibria
-    for (let i = 0; i < rows; i++) {
-        for (let j = 0; j < cols; j++) {
-            if (player1BestResponses[j].includes(i) && player2BestResponses[i].includes(j)) {
-                equilibria.push(`(Rând ${i + 1}, Coloana ${j + 1})`);
-            }
-        }
-    }
-
-    let strategyText, reasonText;
-
-    if (equilibria.length === 0) {
-        strategyText = 'NU există';
-        reasonText = 'Niciun echilibru Nash pur.';
-    } else {
-        strategyText = equilibria.join('; ');
-        reasonText = `Echilibrele Nash Pure sunt: ${strategyText}.`;
-    }
-
-    return {
-        strategy: strategyText,
-        reason: reasonText,
-        type: 'GameTheory',
-        rawEquilibria: equilibria
-    };
-};
-
-
-const generateQuestion = (type) => {
-    return new Promise((resolve) => {
-        setTimeout(() => {
-            if (type === 'search') {
-                const searchProblems = db.getAllProblemTypes('Search');
-                const selectedProblem = searchProblems[Math.floor(Math.random() * searchProblems.length)];
-                const instance = generateSearchInstance(selectedProblem.name);
-
-                // Run algorithm comparison - use ACTUAL results for correctness
-                const comparisonResults = runAlgorithmComparison(selectedProblem.name, instance);
-                const bestStrategy = selectBestStrategy(comparisonResults);
-                
-                // Create correctAnswer from actual algorithm results (empirical, not theoretical)
-                const correctAnswer = {
-                    strategy: bestStrategy.strategyUsed,
-                    reason: `Strategia ${bestStrategy.strategyUsed} este cea mai rapidă pentru această instanță (${bestStrategy.executionTime}ms), explorând ${bestStrategy.nodesExplored} noduri.`,
-                    type: 'Search'
-                };
-
-                const question = {
-                    id: Date.now(),
-                    problem: { ...selectedProblem, instance },
-                    correctAnswer: correctAnswer,
-                    type: 'Search',
-                    text: `Pentru problema **${selectedProblem.name}** cu instanța:\n\n${instance.text}\n\nCare este cea mai potrivită strategie de rezolvare?`,
-                    comparisonResults: comparisonResults,
-                    bestStrategy: bestStrategy
-                };
-
-                db.logQuestion(selectedProblem.id, instance, correctAnswer);
-                resolve(question);
-            } else if (type === 'nash') {
-                const nashProblem = db.getProblemTypeByName('Nash Equilibrium');
-                const instance = generateNashInstance();
-                const correctAnswer = determineNashEquilibrium(instance.matrix);
-
-                const question = {
-                    id: Date.now(),
-                    problem: { ...nashProblem, instance },
-                    correctAnswer: correctAnswer,
-                    type: 'GameTheory',
-                    text: `Pentru jocul dat în forma normală cu plățile (P1, P2):\n\n${instance.visual}\n\n**Există Echilibru Nash Pur? Care este acesta?**`
-                };
-
-                db.logQuestion(nashProblem.id, instance, correctAnswer);
-                resolve(question);
-            }
-        }, 800);
-    });
-};
-
-const evaluateAnswer = (question, userAnswer) => {
-    const { type, correctAnswer, comparisonResults, bestStrategy } = question;
-    const userAnswerLower = userAnswer.toLowerCase().trim();
-    let score = 0;
-    let feedback = '';
-
-    if (type === 'Search') {
-        const correctStrategyLower = correctAnswer.strategy.toLowerCase();
-
-        // Exact match - full credit
-        if (userAnswerLower.includes(correctStrategyLower)) {
-            score = 100;
-            feedback = `Excelent! ${correctAnswer.strategy} este strategia cu cea mai bună performanță pentru această instanță (${bestStrategy.executionTime}ms).`;
-        } else {
-            const allStrategies = db.db.searchStrategies;
-            let foundStrategy = null;
-            let foundStrategyName = null;
-            let isPartialMatch = false;
-
-            // Check which strategy user mentioned
-            for (const strategy of allStrategies) {
-                const strategyLower = strategy.name.toLowerCase();
-                
-                // Exact match in database
-                if (userAnswerLower.includes(strategyLower)) {
-                    foundStrategy = strategy;
-                    foundStrategyName = strategy.name;
-                    isPartialMatch = false;
-                    break;
-                }
-                
-                // Partial match - check if ANY word from strategy is in user answer
-                const strategyWords = strategyLower.split(/\s+|-/); // Split by space or dash
-                const userWords = userAnswerLower.split(/\s+|-/);
-                const matchedWords = strategyWords.filter(word => 
-                    userWords.some(uword => word === uword || word.includes(uword) || uword.includes(word))
-                );
-                
-                // Accept if at least 30% of words match or if first word matches
-                const wordMatchRatio = matchedWords.length / strategyWords.length;
-                if ((wordMatchRatio >= 0.3) || (strategyWords[0] && userWords.some(w => w === strategyWords[0]))) {
-                    foundStrategy = strategy;
-                    foundStrategyName = strategy.name;
-                    isPartialMatch = true; // This is a partial match
-                    break;
-                }
-            }
-
-            if (foundStrategyName) {
-                // Check if mentioned strategy is in comparison results
-                const mentionedResult = comparisonResults.find(r => r.strategyUsed === foundStrategyName);
-                
-                if (mentionedResult && mentionedResult === bestStrategy) {
-                    // User mentioned the fastest strategy
-                    if (isPartialMatch) {
-                        score = 75;
-                        feedback = `Bună! Ai identificat corect conceptul (${foundStrategyName}) care este cea mai rapidă (${bestStrategy.executionTime}ms), dar răspunsul complet este: ${correctAnswer.strategy}.`;
-                    } else {
-                        score = 100;
-                        feedback = `Excelent! ${foundStrategyName} este strategia cu cea mai bună performanță (${bestStrategy.executionTime}ms).`;
-                    }
-                } else if (mentionedResult) {
-                    // User mentioned a valid strategy, but not the fastest
-                    const timeDiff = (parseFloat(mentionedResult.executionTime) - parseFloat(bestStrategy.executionTime)).toFixed(2);
-                    score = 60;
-                    feedback = `Bună răspuns! ${foundStrategyName} este o strategie validă (${mentionedResult.executionTime}ms), dar ${correctAnswer.strategy} este mai rapid cu ${timeDiff}ms.`;
-                } else {
-                    // Strategy mentioned is not in comparison results
-                    score = 40;
-                    feedback = `Răspunsul tău menționează ${foundStrategyName}, dar ${correctAnswer.strategy} este mai rapid pentru această instanță specifică (${bestStrategy.executionTime}ms).`;
-                }
-            } else {
-                score = 0;
-                feedback = `Răspunsul nu menționează o strategie validă. Strategii testate: ${comparisonResults.map(r => r.strategyUsed).join(', ')}.`;
-            }
-        }
-    } else if (type === 'GameTheory') {
-        // Parse user input - supports multiple formats:
-        // 1. Full pairs: (0,1);(1,0) or (rând 2, coloana 2);(rând 3, coloana 1)
-        // 2. Single cell: (0,1) or (rând 3, coloana 1)
-        const parseNashAnswer = (answer) => {
-            // First normalize: remove Romanian words and extract numbers
-            let normalized = answer
-                .replace(/rând\s*/gi, '')
-                .replace(/coloana\s*/gi, '')
-                .replace(/row\s*/gi, '')
-                .replace(/col\s*/gi, '')
-                .toLowerCase();
-
-            // Try to match full pairs: (n,n);(n,n)
-            const fullPattern = /\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*[;,]\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)/g;
-            const fullMatches = [...normalized.matchAll(fullPattern)];
-            
-            if (fullMatches.length > 0) {
-                return fullMatches.map(match => ({
-                    p1Row: parseInt(match[1]),
-                    p1Col: parseInt(match[2]),
-                    p2Row: parseInt(match[3]),
-                    p2Col: parseInt(match[4]),
-                    original: match[0],
-                    isPartial: false
-                }));
-            }
-            
-            // Try to match single cells: (n,n)
-            const singlePattern = /\(\s*(\d+)\s*,\s*(\d+)\s*\)/g;
-            const singleMatches = [...normalized.matchAll(singlePattern)];
-            
-            if (singleMatches.length > 0) {
-                return singleMatches.map(match => ({
-                    p1Row: parseInt(match[1]),
-                    p1Col: parseInt(match[2]),
-                    p2Row: null,
-                    p2Col: null,
-                    original: match[0],
-                    isPartial: true  // Mark as partial - single cell input
-                }));
-            }
-            
-            return null;
-        };
-
-        const userEquilibria = parseNashAnswer(userAnswer.trim());
-        const correctNash = correctAnswer.rawEquilibria || [];
-
-        // If no equilibria found in string format, try old format fallback
-        if (!userEquilibria || userEquilibria.length === 0) {
-            if (correctNash.length === 0 && (userAnswerLower.includes('nu există') || userAnswerLower.includes('no nash'))) {
-                score = 100;
-                feedback = `Corect! Nu există echilibru Nash pur pentru această matrice.`;
-            } else {
-                score = 0;
-                feedback = `Răspuns incorect. Folosește formatul: (rând, coloană) sau (rând, coloană);(rând, coloană). Exemplu: (3, 1) sau (2, 2);(3, 1)`;
-            }
-        } else if (correctNash.length === 0) {
-            score = 0;
-            feedback = `Răspuns incorect. Nu există echilibru Nash pur pentru această matrice.`;
-        } else {
-            // Convert correctNash string format to parseable format for comparison
-            // correctNash format: "(Rând 2, Coloana 2); (Rând 3, Coloana 1)" or "(Row 2, Column 2); (Row 3, Column 1)"
-            const parseCorrectAnswer = (eq) => {
-                // Try Romanian format first
-                let match = eq.match(/[Rr]âmd\s+(\d+).*[Cc]oloana\s+(\d+)/i);
-                if (match) {
-                    return { row: parseInt(match[1]) - 1, col: parseInt(match[2]) - 1 }; // Convert 1-indexed to 0-indexed
-                }
-                // Try English format
-                match = eq.match(/[Rr]ow\s+(\d+).*[Cc]olumn\s+(\d+)/i);
-                if (match) {
-                    return { row: parseInt(match[1]) - 1, col: parseInt(match[2]) - 1 }; // Convert 1-indexed to 0-indexed
-                }
-                return null;
-            };
-
-            // Parse pairs from correctNash
-            const correctPairs = [];
-            if (correctNash.length > 0) {
-                // correctNash is array like ["(Rând 2, Coloana 2); (Rând 3, Coloana 1)"]
-                const pairString = correctNash[0];
-                const parts = pairString.split(';');
-                if (parts.length === 2) {
-                    const p1 = parseCorrectAnswer(parts[0]);
-                    const p2 = parseCorrectAnswer(parts[1]);
-                    if (p1 && p2) {
-                        correctPairs.push({ p1Row: p1.row, p1Col: p1.col, p2Row: p2.row, p2Col: p2.col });
-                    }
-                }
-            }
-
-            if (correctPairs.length === 0) {
-                // Fallback to old text matching
-                const correctMatches = correctNash.filter(eq =>
-                    userAnswerLower.includes(eq.toLowerCase().replace(/[()]/g, ''))
-                ).length;
-                
-                if (correctMatches === correctNash.length) {
-                    score = 100;
-                    feedback = `Corect! Echilibrul Nash Pur este ${correctAnswer.strategy}.`;
-                } else if (correctNash.length > 0 && userAnswerLower.includes(correctNash[0].toLowerCase().replace(/[()]/g, ''))) {
-                    score = 70;
-                    feedback = `Aproape! Ai identificat un echilibru corect, dar răspunsul complet este: ${correctAnswer.strategy}.`;
-                } else {
-                    score = 0;
-                    feedback = `Răspuns incorect. Echilibrele corecte sunt: ${correctAnswer.strategy}`;
-                }
-            } else {
-                // Check which user answers match correct equilibria
-                let matchedCount = 0;
-                const matchedEquilibria = [];
-                let hasPartialInput = userEquilibria.some(e => e.isPartial);
-
-                for (const userEq of userEquilibria) {
-                    for (const correctEq of correctPairs) {
-                        let isMatch = false;
-                        
-                        if (userEq.isPartial) {
-                            // User provided only (row, col) - check if it matches any part of the equilibrium
-                            // Convert user's input from 0-indexed to 1-indexed to match correctPairs
-                            const userRow1Indexed = userEq.p1Row + 1;
-                            const userCol1Indexed = userEq.p1Col + 1;
-                            const correctRow1Indexed = correctEq.p1Row + 1;
-                            const correctCol1Indexed = correctEq.p1Col + 1;
-                            const correctRow2_1Indexed = correctEq.p2Row + 1;
-                            const correctCol2_1Indexed = correctEq.p2Col + 1;
-                            
-                            isMatch = (userRow1Indexed === correctRow1Indexed && userCol1Indexed === correctCol1Indexed) ||
-                                     (userRow1Indexed === correctRow2_1Indexed && userCol1Indexed === correctCol2_1Indexed);
-                        } else {
-                            // User provided full pair - check exact match
-                            isMatch = (userEq.p1Row === correctEq.p1Row &&
-                                      userEq.p1Col === correctEq.p1Col &&
-                                      userEq.p2Row === correctEq.p2Row &&
-                                      userEq.p2Col === correctEq.p2Col);
-                        }
-                        
-                        if (isMatch) {
-                            matchedCount++;
-                            matchedEquilibria.push(userEq.original);
-                            break;
-                        }
-                    }
-                }
-
-                if (matchedCount === correctPairs.length && userEquilibria.length === correctPairs.length && !hasPartialInput) {
-                    // Perfect match - found all equilibria with full pairs
-                    score = 100;
-                    feedback = `Excelent! Ai găsit toate echilibrele Nash: ${matchedEquilibria.join(', ')}.`;
-                } else if (matchedCount === correctPairs.length && userEquilibria.length === correctPairs.length && hasPartialInput) {
-                    // User found all equilibria but with single cell inputs - give full credit
-                    score = 100;
-                    feedback = `Excelent! Ai găsit toate echilibrele Nash: ${matchedEquilibria.join(', ')}.`;
-                } else if (matchedCount > 0) {
-                    // Partial credit - found some equilibria or partial inputs
-                    const baseScore = Math.round((matchedCount / correctPairs.length) * 100);
-                    score = baseScore; // No penalty - credit proportional to what they found
-                    
-                    // Format correct answer without "Rând" and "Coloana"
-                    const formattedCorrectAnswer = correctAnswer.strategy
-                        .replace(/Rând\s+/gi, '')
-                        .replace(/Coloana\s+/gi, '');
-                    
-                    if (hasPartialInput && matchedCount > 0) {
-                        feedback = `Bun răspuns parțial! Ai identificat corect o parte din echilibru: ${matchedEquilibria.join(', ')}, dar răspunsul complet este: ${formattedCorrectAnswer}`;
-                    } else {
-                        feedback = `Parțial corect! Ai găsit ${matchedCount} din ${correctPairs.length} echilibre. Răspunsul complet: ${formattedCorrectAnswer}`;
-                    }
-                } else {
-                    score = 0;
-                    // Format correct answer without "Rând" and "Coloana"
-                    const formattedCorrectAnswer = correctAnswer.strategy
-                        .replace(/Rând\s+/gi, '')
-                        .replace(/Coloana\s+/gi, '');
-                    feedback = `Răspuns incorect. Echilibrele Nash corecte sunt: ${formattedCorrectAnswer}`;
-                }
-            }
-        }
-    }
-
-    return { score, feedback, correctAnswer };
-};
-
-// ============================================================================
-// REACT COMPONENT
-// ============================================================================
-
-const styles = {
-    container: { minHeight: '100vh', background: 'linear-gradient(to bottom right, #eff6ff, #e0e7ff)', padding: '24px' },
-    maxWidth: { maxWidth: '1152px', margin: '0 auto' },
-    card: { background: 'white', borderRadius: '16px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)', padding: '24px', marginBottom: '24px' },
-    header: { display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '8px' },
-    title: { fontSize: '30px', fontWeight: 'bold', color: '#1f2937' },
-    subtitle: { color: '#4b5563', marginBottom: '16px' },
-    dbInfo: { background: '#f0fdf4', borderRadius: '8px', padding: '12px', border: '1px solid #86efac', marginTop: '16px' },
-    dbLabel: { fontSize: '12px', fontWeight: '600', color: '#166534', marginBottom: '4px' },
-    dbText: { fontSize: '14px', color: '#15803d' },
-    navContainer: { background: 'white', borderRadius: '16px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)', marginBottom: '24px', padding: '8px' },
-    navButtons: { display: 'flex', gap: '8px' },
-    navButton: { flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', padding: '12px 16px', borderRadius: '12px', fontWeight: '500', transition: 'all 0.3s', border: 'none', cursor: 'pointer' },
-    navButtonActive: { background: '#4f46e5', color: 'white', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)' },
-    navButtonInactive: { color: '#4b5563', background: 'transparent' },
-    button: { width: '100%', background: 'linear-gradient(to right, #4f46e5, #7c3aed)', color: 'white', padding: '16px', borderRadius: '12px', fontWeight: '600', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', transition: 'all 0.3s' },
-    buttonDisabled: { opacity: 0.5, cursor: 'not-allowed' },
-    questionBox: { background: '#eef2ff', borderRadius: '12px', padding: '16px', marginBottom: '16px' },
-    questionText: { color: '#374151', whiteSpace: 'pre-line', fontWeight: '500', fontSize: '18px' },
-    problemBox: { background: '#f9fafb', borderRadius: '8px', padding: '16px', borderLeft: '4px solid #818cf8' },
-    problemTitle: { fontWeight: 'bold', color: '#4338ca', fontSize: '18px', marginBottom: '8px' },
-    problemDesc: { fontSize: '14px', color: '#4b5563', marginBottom: '12px' },
-    instanceBox: { background: 'white', borderRadius: '8px', padding: '12px', border: '1px solid #c7d2fe' },
-    instanceLabel: { fontSize: '12px', color: '#6b7280', marginBottom: '4px' },
-    instanceText: { fontWeight: '600', color: '#1f2937', whiteSpace: 'pre-line' },
-    textarea: { width: '100%', height: '128px', padding: '16px', border: '2px solid #e5e7eb', borderRadius: '12px', resize: 'none', fontFamily: 'inherit', fontSize: '14px', outline: 'none' },
-    submitButton: { marginTop: '16px', width: '100%', background: '#16a34a', color: 'white', padding: '12px', borderRadius: '12px', fontWeight: '600', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', transition: 'all 0.3s' },
-    evaluationCard: { background: 'white', borderRadius: '16px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)', padding: '24px' },
-    scoreContainer: { marginBottom: '24px' },
-    scoreRow: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' },
-    scoreLabel: { color: '#374151', fontWeight: '500' },
-    scoreValue: { fontSize: '24px', fontWeight: 'bold' },
-    progressBar: { width: '100%', background: '#e5e7eb', borderRadius: '9999px', height: '12px' },
-    progressFill: { height: '12px', borderRadius: '9999px', transition: 'all 0.3s' },
-    feedbackBox: { background: '#dbeafe', borderRadius: '8px', padding: '16px', marginBottom: '16px' },
-    feedbackLabel: { fontSize: '14px', fontWeight: '600', color: '#1e3a8a', marginBottom: '4px' },
-    feedbackText: { color: '#374151' },
-    correctBox: { background: '#dcfce7', borderRadius: '8px', padding: '16px', marginBottom: '16px' },
-    correctLabel: { fontSize: '14px', fontWeight: '600', color: '#14532d', marginBottom: '8px' },
-    correctAnswer: { fontSize: '18px', fontWeight: 'bold', color: '#1f2937', marginBottom: '8px' },
-    reasonBox: { background: '#faf5ff', borderRadius: '8px', padding: '16px' },
-    reasonLabel: { fontSize: '14px', fontWeight: '600', color: '#581c87', marginBottom: '8px' },
-    reasonText: { color: '#374151' },
-    comparisonBox: { background: '#f0f9ff', borderRadius: '12px', padding: '16px', marginTop: '16px', borderLeft: '4px solid #0284c7' },
-    comparisonTitle: { fontSize: '14px', fontWeight: '600', color: '#0c4a6e', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' },
-    comparisonTable: { width: '100%', borderCollapse: 'collapse', fontSize: '13px' },
-    comparisonTh: { background: '#e0f2fe', padding: '8px', textAlign: 'left', fontWeight: '600', color: '#0c4a6e', borderBottom: '2px solid #0284c7' },
-    comparisonTd: { padding: '8px', borderBottom: '1px solid #bae6fd', color: '#164e63' },
-    comparisonBest: { background: '#cffafe', fontWeight: '600', color: '#0c4a6e' },
-    questionTypeSelector: { display: 'flex', gap: '12px', marginBottom: '16px', padding: '0 8px' },
-    typeButton: { flex: 1, padding: '12px 16px', borderRadius: '12px', fontWeight: '600', border: '2px solid #e5e7eb', cursor: 'pointer', background: 'white', transition: 'all 0.2s', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' },
-    typeButtonActive: { borderColor: '#4f46e5', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)', background: '#eef2ff', color: '#4f46e5' },
-    chatContainer: { background: 'white', borderRadius: '16px', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)', height: '600px', display: 'flex', flexDirection: 'column' },
-    chatHeader: { padding: '24px', borderBottom: '1px solid #e5e7eb' },
-    chatTitle: { fontSize: '20px', fontWeight: 'bold', color: '#1f2937' },
-    chatSubtitle: { fontSize: '14px', color: '#4b5563' },
-    chatMessages: { flex: 1, overflowY: 'auto', padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' },
-    chatEmpty: { textAlign: 'center', paddingTop: '48px', paddingBottom: '48px' },
-    chatEmptyIcon: { width: '64px', height: '64px', color: '#d1d5db', margin: '0 auto 16px' },
-    chatEmptyText: { color: '#6b7280', marginBottom: '24px' },
-    suggestionGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px', maxWidth: '672px', margin: '0 auto' },
-    suggestionButton: { fontSize: '14px', background: '#eef2ff', color: '#4338ca', padding: '8px 16px', borderRadius: '8px', border: 'none', cursor: 'pointer', transition: 'all 0.3s', textAlign: 'left' },
-    messageRow: { display: 'flex' },
-    messageRowUser: { justifyContent: 'flex-end' },
-    messageRowAssistant: { justifyContent: 'flex-start' },
-    messageBubble: { maxWidth: '80%', borderRadius: '16px', padding: '16px' },
-    messageBubbleUser: { background: '#4f46e5', color: 'white' },
-    messageBubbleAssistant: { background: '#f3f4f6', color: '#1f2937' },
-    messageText: { whiteSpace: 'pre-wrap', fontSize: '14px' },
-    chatInput: { padding: '24px', borderTop: '1px solid #e5e7eb' },
-    chatInputRow: { display: 'flex', gap: '8px' },
-    input: { flex: 1, padding: '12px', border: '2px solid #e5e7eb', borderRadius: '12px', fontSize: '14px', outline: 'none' },
-    sendButton: { background: '#4f46e5', color: 'white', padding: '12px 24px', borderRadius: '12px', fontWeight: '600', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px', transition: 'all 0.3s' }
-};
 
 const SmarTestApp = () => {
     const [activeTab, setActiveTab] = useState('generator');
-    const [questionType, setQuestionType] = useState('search');
-    const [currentQuestion, setCurrentQuestion] = useState(null);
-    const [userAnswer, setUserAnswer] = useState('');
-    const [evaluation, setEvaluation] = useState(null);
-    const [chatMessages, setChatMessages] = useState([]);
-    const [chatInput, setChatInput] = useState('');
-    const [isGenerating, setIsGenerating] = useState(false);
-
-    const handleGenerateQuestion = async () => {
-        setIsGenerating(true);
-        setEvaluation(null);
-        setUserAnswer('');
-        const question = await generateQuestion(questionType);
-        setCurrentQuestion(question);
-        setIsGenerating(false);
-    };
-
-    const handleEvaluateAnswer = async () => {
-        if (!userAnswer.trim() || !currentQuestion) return;
-        const result = evaluateAnswer(currentQuestion, userAnswer);
-        setEvaluation(result);
-    };
-
-    const handleChatSubmit = () => {
-        if (!chatInput.trim()) return;
-        const userMessage = { role: 'user', content: chatInput };
-        setChatMessages([...chatMessages, userMessage]);
-        const currentInput = chatInput;
-        setChatInput('');
-
-        setTimeout(() => {
-            const response = generateChatResponse(currentInput);
-            setChatMessages(prev => [...prev, { role: 'assistant', content: response }]);
-        }, 500);
-    };
-
-    const QuestionTypeSelector = () => (
-        <div style={styles.questionTypeSelector}>
-            <button onClick={() => { setQuestionType('search'); setCurrentQuestion(null); setEvaluation(null); setUserAnswer(''); }} style={{ ...styles.typeButton, ...(questionType === 'search' ? styles.typeButtonActive : {}) }}>
-                <Sparkles style={{ width: '20px', height: '20px' }} />
-                Strategii Căutare
-            </button>
-            <button onClick={() => { setQuestionType('nash'); setCurrentQuestion(null); setEvaluation(null); setUserAnswer(''); }} style={{ ...styles.typeButton, ...(questionType === 'nash' ? styles.typeButtonActive : {}) }}>
-                <Box style={{ width: '20px', height: '20px' }} />
-                Echilibru Nash
-            </button>
-        </div>
-    );
 
     return (
-        <div style={styles.container}>
-            <div style={styles.maxWidth}>
-                <div style={styles.card}>
-                    <div style={styles.header}>
-                        <Database style={{ width: '32px', height: '32px', color: '#4f46e5' }} />
-                        <h1 style={styles.title}>SmarTest AI - SQLite Database</h1>
-                    </div>
-                    <p style={styles.subtitle}>Sistem cu bază de date SQLite pentru generarea și evaluarea întrebărilor AI</p>
-                    <div style={styles.dbInfo}>
-                        <p style={styles.dbLabel}>📊 Database Status:</p>
-                        <p style={styles.dbText}>
-                            ✅ {db.db.problemTypes.length} Problem Types | {db.db.searchStrategies.length} Strategies | {db.db.strategyRules.length} Rules | {db.db.questionLog.length} Generated Questions
-                        </p>
-                    </div>
-                </div>
+        <div style={{
+            minHeight: '100vh',
+            background: 'linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%)',
+            padding: '32px 24px',
+            position: 'relative',
+            overflow: 'hidden'
+        }}>
+            {/* Animated Background Orbs */}
+            <div style={{
+                position: 'fixed',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                pointerEvents: 'none',
+                zIndex: 0,
+                overflow: 'hidden'
+            }}>
+                <div style={{
+                    position: 'absolute',
+                    width: '600px',
+                    height: '600px',
+                    borderRadius: '50%',
+                    background: 'radial-gradient(circle, rgba(102, 126, 234, 0.3) 0%, transparent 70%)',
+                    top: '-200px',
+                    left: '-100px',
+                    animation: 'float 20s ease-in-out infinite'
+                }} />
+                <div style={{
+                    position: 'absolute',
+                    width: '500px',
+                    height: '500px',
+                    borderRadius: '50%',
+                    background: 'radial-gradient(circle, rgba(240, 147, 251, 0.25) 0%, transparent 70%)',
+                    bottom: '-150px',
+                    right: '-100px',
+                    animation: 'float 20s ease-in-out infinite',
+                    animationDelay: '-10s'
+                }} />
+                <div style={{
+                    position: 'absolute',
+                    width: '400px',
+                    height: '400px',
+                    borderRadius: '50%',
+                    background: 'radial-gradient(circle, rgba(0, 212, 255, 0.2) 0%, transparent 70%)',
+                    top: '40%',
+                    left: '30%',
+                    animation: 'float 25s ease-in-out infinite',
+                    animationDelay: '-5s'
+                }} />
+            </div>
 
-                <div style={styles.navContainer}>
-                    <div style={styles.navButtons}>
-                        <button onClick={() => setActiveTab('generator')} style={{ ...styles.navButton, ...(activeTab === 'generator' ? styles.navButtonActive : styles.navButtonInactive) }}>
-                            <Sparkles style={{ width: '20px', height: '20px' }} />
-                            Generator Întrebări
-                        </button>
-                        <button onClick={() => setActiveTab('chat')} style={{ ...styles.navButton, ...(activeTab === 'chat' ? styles.navButtonActive : styles.navButtonInactive) }}>
-                            <MessageSquare style={{ width: '20px', height: '20px' }} />
-                            Agent Conversațional
-                        </button>
-                    </div>
-                </div>
+            <style>{`
+                @keyframes float {
+                    0%, 100% { transform: translate(0, 0) scale(1); }
+                    25% { transform: translate(50px, -30px) scale(1.1); }
+                    50% { transform: translate(-30px, 50px) scale(0.95); }
+                    75% { transform: translate(-50px, -20px) scale(1.05); }
+                }
+                @keyframes pulse {
+                    0%, 100% { opacity: 1; transform: scale(1); }
+                    50% { opacity: 0.8; transform: scale(1.05); }
+                }
+                @keyframes slideUp {
+                    from { opacity: 0; transform: translateY(20px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+            `}</style>
 
-                {activeTab === 'generator' && (
-                    <div>
-                        <div style={styles.card}>
-                            <QuestionTypeSelector />
-                            <button onClick={handleGenerateQuestion} disabled={isGenerating} style={{ ...styles.button, ...(isGenerating ? styles.buttonDisabled : {}) }}>
-                                {isGenerating ? <><RotateCcw style={{ width: '20px', height: '20px' }} /> Se generează...</> : <><Sparkles style={{ width: '20px', height: '20px' }} /> Generează Întrebare Nouă</>}
-                            </button>
+            <div style={{ maxWidth: '1200px', margin: '0 auto', position: 'relative', zIndex: 1 }}>
+                {/* Hero Header Card */}
+                <div style={{
+                    background: 'rgba(255, 255, 255, 0.95)',
+                    backdropFilter: 'blur(20px)',
+                    borderRadius: '28px',
+                    padding: '32px',
+                    marginBottom: '24px',
+                    border: '1px solid rgba(255, 255, 255, 0.3)',
+                    boxShadow: '0 25px 80px rgba(0, 0, 0, 0.2), 0 12px 35px rgba(102, 126, 234, 0.2)',
+                    animation: 'slideUp 0.5s ease-out'
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '16px' }}>
+                        <div style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            width: '64px',
+                            height: '64px',
+                            borderRadius: '18px',
+                            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                            boxShadow: '0 8px 25px rgba(102, 126, 234, 0.4)'
+                        }}>
+                            <Brain style={{ width: '36px', height: '36px', color: 'white' }} />
                         </div>
-
-                        {currentQuestion && (
-                            <>
-                                <div style={styles.card}>
-                                    <div style={styles.header}>
-                                        <FileText style={{ width: '24px', height: '24px', color: '#4f46e5' }} />
-                                        <h2 style={{ fontSize: '20px', fontWeight: 'bold', color: '#1f2937' }}>
-                                            Întrebarea {currentQuestion.type === 'GameTheory' ? '(Teoria Jocurilor)' : '(Strategii de Căutare)'}
-                                        </h2>
-                                    </div>
-                                    <div style={styles.questionBox}>
-                                        <p style={styles.questionText}>{currentQuestion.text}</p>
-                                    </div>
-                                    <div style={styles.problemBox}>
-                                        <h4 style={styles.problemTitle}>{currentQuestion.problem.name}</h4>
-                                        <p style={styles.problemDesc}>{currentQuestion.problem.description}</p>
-                                        <div style={styles.instanceBox}>
-                                            <p style={styles.instanceLabel}>Instanță Detaliată:</p>
-                                            <p style={styles.instanceText}>{currentQuestion.problem.instance.text}</p>
-                                            {currentQuestion.type === 'GameTheory' && currentQuestion.problem.instance.visual && (
-                                                <div style={{ marginTop: '8px' }}>
-                                                    <p style={styles.instanceLabel}>Matricea (P1, P2):</p>
-                                                    <pre style={styles.instanceText}>{currentQuestion.problem.instance.visual}</pre>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-
-                                    {currentQuestion.type === 'Search' && currentQuestion.comparisonResults && currentQuestion.comparisonResults.length > 0 && evaluation && (
-                                        <div style={styles.comparisonBox}>
-                                            <div style={styles.comparisonTitle}>
-                                                <Zap style={{ width: '16px', height: '16px' }} />
-                                                Comparație Algoritmi - Rezultate Execuție
-                                            </div>
-                                            <table style={styles.comparisonTable}>
-                                                <thead>
-                                                    <tr>
-                                                        <th style={styles.comparisonTh}>Algoritm</th>
-                                                        <th style={styles.comparisonTh}>Status</th>
-                                                        <th style={styles.comparisonTh}>Timp (ms)</th>
-                                                        <th style={styles.comparisonTh}>Noduri Explorate</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    {currentQuestion.comparisonResults.map((result, idx) => (
-                                                        <tr key={idx} style={currentQuestion.bestStrategy && result === currentQuestion.bestStrategy ? { background: '#cffafe' } : {}}>
-                                                            <td style={{ ...styles.comparisonTd, fontWeight: currentQuestion.bestStrategy && result === currentQuestion.bestStrategy ? '600' : 'normal' }}>
-                                                                {result.strategyUsed}
-                                                                {currentQuestion.bestStrategy && result === currentQuestion.bestStrategy && ' ⭐'}
-                                                            </td>
-                                                            <td style={styles.comparisonTd}>
-                                                                {result.found ? '✅ Soluție găsită' : '⚠️ Nu s-a găsi'}
-                                                            </td>
-                                                            <td style={{ ...styles.comparisonTd, fontWeight: 'bold', color: result === currentQuestion.bestStrategy ? '#0c4a6e' : '#164e63' }}>
-                                                                {result.executionTime}
-                                                            </td>
-                                                            <td style={styles.comparisonTd}>{result.nodesExplored}</td>
-                                                        </tr>
-                                                    ))}
-                                                </tbody>
-                                            </table>
-                                            {currentQuestion.bestStrategy && (
-                                                <div style={{ marginTop: '12px', padding: '8px', background: '#d1fae5', borderRadius: '6px', fontSize: '13px', color: '#065f46' }}>
-                                                    <strong>Cel mai rapid:</strong> {currentQuestion.bestStrategy.strategyUsed} - {currentQuestion.bestStrategy.executionTime}ms
-                                                </div>
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-
-                                <div style={styles.card}>
-                                    <h3 style={{ fontSize: '18px', fontWeight: 'bold', color: '#1f2937', marginBottom: '16px' }}>Răspunsul Tău</h3>
-                                    <textarea value={userAnswer} onChange={(e) => setUserAnswer(e.target.value)} placeholder="Introdu răspunsul..." style={styles.textarea} />
-                                    <button onClick={handleEvaluateAnswer} disabled={!userAnswer.trim()} style={{ ...styles.submitButton, ...(!userAnswer.trim() ? styles.buttonDisabled : {}) }}>
-                                        <CheckCircle style={{ width: '20px', height: '20px' }} />
-                                        Evaluează Răspunsul
-                                    </button>
-                                </div>
-
-                                {evaluation && (
-                                    <div style={styles.evaluationCard}>
-                                        <div style={styles.header}>
-                                            {evaluation.score >= 70 ? <CheckCircle style={{ width: '24px', height: '24px', color: '#16a34a' }} /> : <AlertCircle style={{ width: '24px', height: '24px', color: '#ea580c' }} />}
-                                            <h3 style={{ fontSize: '20px', fontWeight: 'bold', color: '#1f2937' }}>Evaluare</h3>
-                                        </div>
-                                        <div style={styles.scoreContainer}>
-                                            <div style={styles.scoreRow}>
-                                                <span style={styles.scoreLabel}>Scor</span>
-                                                <span style={{ ...styles.scoreValue, color: evaluation.score >= 70 ? '#16a34a' : '#ea580c' }}>{evaluation.score}%</span>
-                                            </div>
-                                            <div style={styles.progressBar}>
-                                                <div style={{ ...styles.progressFill, width: `${evaluation.score}%`, background: evaluation.score >= 70 ? '#16a34a' : '#ea580c' }} />
-                                            </div>
-                                        </div>
-                                        <div style={styles.feedbackBox}>
-                                            <p style={styles.feedbackLabel}>Feedback</p>
-                                            <p style={styles.feedbackText}>{evaluation.feedback}</p>
-                                        </div>
-                                        <div style={styles.correctBox}>
-                                            <p style={styles.correctLabel}>Răspuns Corect</p>
-                                            <p style={styles.correctAnswer}>{evaluation.correctAnswer.strategy}</p>
-                                        </div>
-                                        <div style={styles.reasonBox}>
-                                            <p style={styles.reasonLabel}>Justificare Detaliată</p>
-                                            <p style={styles.reasonText}>{evaluation.correctAnswer.reason}</p>
-                                        </div>
-                                    </div>
-                                )}
-                            </>
-                        )}
+                        <div>
+                            <h1 style={{
+                                fontSize: '36px',
+                                fontWeight: '800',
+                                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                                WebkitBackgroundClip: 'text',
+                                WebkitTextFillColor: 'transparent',
+                                backgroundClip: 'text',
+                                margin: 0,
+                                letterSpacing: '-0.5px'
+                            }}>SmarTest AI</h1>
+                            <p style={{ color: '#64748b', fontSize: '16px', margin: '4px 0 0' }}>
+                                Intelligent Question Generation & Evaluation Platform
+                            </p>
+                        </div>
                     </div>
-                )}
 
-                {activeTab === 'chat' && (
-                    <div style={styles.chatContainer}>
-                        <div style={styles.chatHeader}>
-                            <h2 style={styles.chatTitle}>Agent Conversațional AI</h2>
-                            <p style={styles.chatSubtitle}>Powered by SQLite Database</p>
-                        </div>
-                        <div style={styles.chatMessages}>
-                            {chatMessages.length === 0 ? (
-                                <div style={styles.chatEmpty}>
-                                    <MessageSquare style={styles.chatEmptyIcon} />
-                                    <p style={styles.chatEmptyText}>Începe o conversație!</p>
+                    {/* Stats Bar */}
+                    <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+                        gap: '16px',
+                        marginTop: '24px'
+                    }}>
+                        <div style={{
+                            padding: '16px 20px',
+                            borderRadius: '16px',
+                            background: 'linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%)',
+                            border: '1px solid rgba(102, 126, 234, 0.2)'
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <Database style={{ width: '20px', height: '20px', color: '#667eea' }} />
+                                <div>
+                                    <div style={{ fontSize: '20px', fontWeight: '700', color: '#1e293b' }}>{db.db.problemTypes.length}</div>
+                                    <div style={{ fontSize: '12px', color: '#64748b', fontWeight: '500' }}>Problem Types</div>
                                 </div>
-                            ) : (
-                                chatMessages.map((msg, idx) => (
-                                    <div key={idx} style={{ ...styles.messageRow, ...(msg.role === 'user' ? styles.messageRowUser : styles.messageRowAssistant) }}>
-                                        <div style={{ ...styles.messageBubble, ...(msg.role === 'user' ? styles.messageBubbleUser : styles.messageBubbleAssistant) }}>
-                                            <pre style={styles.messageText}>{msg.content}</pre>
-                                        </div>
-                                    </div>
-                                ))
-                            )}
+                            </div>
                         </div>
-                        <div style={styles.chatInput}>
-                            <div style={styles.chatInputRow}>
-                                <input type="text" value={chatInput} onChange={(e) => setChatInput(e.target.value)} onKeyPress={(e) => e.key === 'Enter' && handleChatSubmit()} placeholder="Scrie întrebarea..." style={styles.input} />
-                                <button onClick={handleChatSubmit} disabled={!chatInput.trim()} style={{ ...styles.sendButton, ...(!chatInput.trim() ? styles.buttonDisabled : {}) }}>
-                                    <Send style={{ width: '20px', height: '20px' }} />
-                                </button>
+                        <div style={{
+                            padding: '16px 20px',
+                            borderRadius: '16px',
+                            background: 'linear-gradient(135deg, rgba(240, 147, 251, 0.1) 0%, rgba(245, 87, 108, 0.1) 100%)',
+                            border: '1px solid rgba(240, 147, 251, 0.2)'
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <Sparkles style={{ width: '20px', height: '20px', color: '#f093fb' }} />
+                                <div>
+                                    <div style={{ fontSize: '20px', fontWeight: '700', color: '#1e293b' }}>{db.db.searchStrategies.length}</div>
+                                    <div style={{ fontSize: '12px', color: '#64748b', fontWeight: '500' }}>Strategies</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div style={{
+                            padding: '16px 20px',
+                            borderRadius: '16px',
+                            background: 'linear-gradient(135deg, rgba(0, 212, 255, 0.1) 0%, rgba(56, 239, 125, 0.1) 100%)',
+                            border: '1px solid rgba(0, 212, 255, 0.2)'
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <Cpu style={{ width: '20px', height: '20px', color: '#00d4ff' }} />
+                                <div>
+                                    <div style={{ fontSize: '20px', fontWeight: '700', color: '#1e293b' }}>{db.db.strategyRules.length}</div>
+                                    <div style={{ fontSize: '12px', color: '#64748b', fontWeight: '500' }}>Rules</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div style={{
+                            padding: '16px 20px',
+                            borderRadius: '16px',
+                            background: 'linear-gradient(135deg, rgba(17, 153, 142, 0.1) 0%, rgba(56, 239, 125, 0.1) 100%)',
+                            border: '1px solid rgba(56, 239, 125, 0.2)'
+                        }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                                <FileText style={{ width: '20px', height: '20px', color: '#38ef7d' }} />
+                                <div>
+                                    <div style={{ fontSize: '20px', fontWeight: '700', color: '#1e293b' }}>{db.db.questionLog.length}</div>
+                                    <div style={{ fontSize: '12px', color: '#64748b', fontWeight: '500' }}>Generated</div>
+                                </div>
                             </div>
                         </div>
                     </div>
-                )}
+                </div>
+
+                {/* Navigation Pills */}
+                <div style={{
+                    background: 'rgba(255, 255, 255, 0.95)',
+                    backdropFilter: 'blur(20px)',
+                    borderRadius: '20px',
+                    marginBottom: '24px',
+                    padding: '10px',
+                    border: '1px solid rgba(255, 255, 255, 0.3)',
+                    boxShadow: '0 15px 50px rgba(0, 0, 0, 0.15)',
+                    animation: 'slideUp 0.5s ease-out',
+                    animationDelay: '0.1s',
+                    animationFillMode: 'both'
+                }}>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                        {[
+                            { id: 'generator', label: 'Generator Întrebări', icon: BookOpen },
+                            { id: 'test', label: 'Generare Teste', icon: FileText },
+                            { id: 'chat', label: 'Agent Conversațional', icon: MessageSquare }
+                        ].map((tab) => {
+                            const Icon = tab.icon;
+                            const isActive = activeTab === tab.id;
+                            return (
+                                <button
+                                    key={tab.id}
+                                    onClick={() => setActiveTab(tab.id)}
+                                    style={{
+                                        flex: 1,
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        gap: '10px',
+                                        padding: '16px 20px',
+                                        borderRadius: '14px',
+                                        fontWeight: '600',
+                                        fontSize: '15px',
+                                        border: 'none',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+                                        background: isActive
+                                            ? 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
+                                            : 'transparent',
+                                        color: isActive ? 'white' : '#64748b',
+                                        boxShadow: isActive
+                                            ? '0 8px 25px rgba(102, 126, 234, 0.4)'
+                                            : 'none',
+                                        transform: isActive ? 'scale(1)' : 'scale(1)'
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        if (!isActive) {
+                                            e.currentTarget.style.background = 'rgba(102, 126, 234, 0.1)';
+                                            e.currentTarget.style.color = '#667eea';
+                                        }
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        if (!isActive) {
+                                            e.currentTarget.style.background = 'transparent';
+                                            e.currentTarget.style.color = '#64748b';
+                                        }
+                                    }}
+                                >
+                                    <Icon style={{ width: '20px', height: '20px' }} />
+                                    {tab.label}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+
+                {/* Content Area */}
+                <div style={{
+                    animation: 'slideUp 0.5s ease-out',
+                    animationDelay: '0.2s',
+                    animationFillMode: 'both'
+                }}>
+                    {activeTab === 'generator' && <QuestionGenerator generateQuestion={generateQuestion} evaluateAnswer={evaluateAnswer} />}
+                    {activeTab === 'test' && <TestGenerator />}
+                    {activeTab === 'chat' && <ChatInterface generateChatResponse={generateChatResponse} />}
+                </div>
             </div>
         </div>
     );
 };
 
-export default SmarTestApp
+export default SmarTestApp;

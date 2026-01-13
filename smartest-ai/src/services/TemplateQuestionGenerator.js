@@ -163,15 +163,18 @@ class TemplateQuestionGenerator {
         // Find Nash equilibrium (simplified - real implementation more complex)
         const equilibria = this.findNashEquilibria(matrix);
 
+        // Format equilibria as (row,col) pairs separated by spaces
+        const equilibriaFormatted = equilibria.map(e => `(${e[0]},${e[1]})`).join(' ');
+
         return {
             rows,
             cols,
             matrix,
-            equilibria,
+            equilibria: equilibriaFormatted,
             'rows': rows,
             'cols': cols,
             'matrix': this.formatPayoffMatrix(matrixDisplay),
-            'equilibria': equilibria.map(e => `(${e[0]}, ${e[1]})`).join(', ')
+            'equilibria': equilibriaFormatted
         };
     }
 
@@ -267,11 +270,25 @@ class TemplateQuestionGenerator {
                 return this.determineBestSearchStrategy(instanceData);
 
             case 'nash':
-                // Nash equilibrium from computed equilibria
+                // Nash equilibrium from computed equilibria - format as (row,col) pairs
+                const equilibriaList = instanceData.equilibria
+                    .split(', ')
+                    .filter(e => e.trim())
+                    .map(e => {
+                        // Remove existing parentheses if any and reformat as (row,col)
+                        const match = e.match(/\((\d+),\s*(\d+)\)/);
+                        if (match) {
+                            return `(${match[1]},${match[2]})`;
+                        }
+                        return e;
+                    })
+                    .join(' ');
+
                 return {
                     type: 'equilibrium_pair',
-                    rawSolution: instanceData.equilibria,
-                    formatted: instanceData.equilibria
+                    rawEquilibria: equilibriaList.split(' ').filter(e => e.match(/^\(\d+,\d+\)$/)),
+                    formatted: equilibriaList,
+                    strategy: equilibriaList // For backward compatibility
                 };
 
             case 'csp':

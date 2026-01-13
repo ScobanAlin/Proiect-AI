@@ -67,12 +67,12 @@ export const determineNashEquilibrium = (matrix) => {
     for (let i = 0; i < rows; i++) {
         for (let j = 0; j < cols; j++) {
             if (player1BestResponses[j].includes(i) && player2BestResponses[i].includes(j)) {
-                equilibria.push(`(Rând ${i + 1}, Coloana ${j + 1})`);
+                equilibria.push(`(${i + 1},${j + 1})`);
             }
         }
     }
 
-    const strategyText = equilibria.length === 0 ? 'NU există' : equilibria.join('; ');
+    const strategyText = equilibria.length === 0 ? 'NU există' : equilibria.join(' ');
     const reasonText = equilibria.length === 0
         ? 'Niciun echilibru Nash pur.'
         : `Echilibrele Nash Pure sunt: ${strategyText}.`;

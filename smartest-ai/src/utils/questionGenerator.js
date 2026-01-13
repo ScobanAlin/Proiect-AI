@@ -129,7 +129,7 @@ export const generateQuestion = (type, difficultyConfig = {}) => {
                     problem: { ...nashProblem, instance },
                     correctAnswer,
                     type: 'GameTheory',
-                    text: `Matrice de plăți (P1, P2) - ${instance.rows}x${instance.cols}:\n\n${instance.visual}\n\n**Găsiți Echilibrele Nash (pure)?**\n\n*Format răspuns: (rând, coloană) - ex: (1, 2) sau (2, 3); (1, 1) pentru mai multe echilibre*`
+                    text: `Matrice de plăți (P1, P2) - ${instance.rows}x${instance.cols}:\n\n${instance.visual}\n\n**Găsiți Echilibrele Nash (pure)?**\n\n*Format răspuns: (rând,coloană) - ex: (1,2) sau (2,3) (1,1) pentru mai multe echilibre*`
                 };
 
                 db.logQuestion(nashProblem.id, instance, correctAnswer);

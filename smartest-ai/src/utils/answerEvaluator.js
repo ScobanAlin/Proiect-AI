@@ -87,161 +87,105 @@ export const evaluateAnswer = (question, userAnswer) => {
             feedback = `Răspuns incorect. Valoarea corectă la rădăcină este ${correctAnswer.rootValue}, iar numărul de frunze vizitate este ${correctAnswer.visitedLeaves}.`;
         }
     } else if (type === 'GameTheory') {
+        // Parse user answer in format (row,col) or (row,col) (row,col)
         const parseNashAnswer = (answer) => {
-            let normalized = answer
-                .replace(/rând\s*/gi, '')
-                .replace(/coloana\s*/gi, '')
-                .replace(/row\s*/gi, '')
-                .replace(/col\s*/gi, '')
-                .toLowerCase();
+            const normalized = answer.trim().toLowerCase();
+            const singlePattern = /\(\s*(\d+)\s*,\s*(\d+)\s*\)/g;
+            const matches = [...normalized.matchAll(singlePattern)];
 
-            const fullPattern = /\(\s*(\d+)\s*,\s*(\d+)\s*\)\s*[;,]\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)/g;
-            const fullMatches = [...normalized.matchAll(fullPattern)];
+            if (matches.length === 0) {
+                return null;
+            }
 
-            if (fullMatches.length > 0) {
-                return fullMatches.map(match => ({
-                    p1Row: parseInt(match[1]) - 1,  // Convert to 0-indexed
-                    p1Col: parseInt(match[2]) - 1,  // Convert to 0-indexed
-                    p2Row: parseInt(match[3]) - 1,  // Convert to 0-indexed
-                    p2Col: parseInt(match[4]) - 1,  // Convert to 0-indexed
-                    original: match[0],
-                    isPartial: false
-                }));
+            return matches.map(match => ({
+                row: parseInt(match[1]),  // Keep as 1-indexed to match correctAnswer format
+                col: parseInt(match[2]),
+                original: match[0]
+            }));
+        };
+
+        // Parse correct answer - should be array like ["(1,2)", "(2,1)"] or string like "(1,2) (2,1)"
+        const parseCorrectNash = (answer) => {
+            let answerString = '';
+            if (Array.isArray(answer)) {
+                answerString = answer.join(' ');
+            } else if (typeof answer === 'string') {
+                answerString = answer;
+            } else {
+                return [];
             }
 
             const singlePattern = /\(\s*(\d+)\s*,\s*(\d+)\s*\)/g;
-            const singleMatches = [...normalized.matchAll(singlePattern)];
+            const matches = [...answerString.matchAll(singlePattern)];
 
-            if (singleMatches.length > 0) {
-                return singleMatches.map(match => ({
-                    p1Row: parseInt(match[1]) - 1,  // Convert to 0-indexed
-                    p1Col: parseInt(match[2]) - 1,  // Convert to 0-indexed
-                    p2Row: null,
-                    p2Col: null,
-                    original: match[0],
-                    isPartial: true
-                }));
-            }
-
-            return null;
+            return matches.map(match => ({
+                row: parseInt(match[1]),
+                col: parseInt(match[2]),
+                original: match[0]
+            }));
         };
 
         const userEquilibria = parseNashAnswer(userAnswer.trim());
-        const correctNash = correctAnswer.rawEquilibria || [];
+        const correctEquilibria = parseCorrectNash(correctAnswer.rawEquilibria || correctAnswer.strategy || '');
+        const userAnswerLower = userAnswer.toLowerCase().trim();
 
+        // Handle "no Nash equilibrium" case
         if (!userEquilibria || userEquilibria.length === 0) {
-            if (correctNash.length === 0 && (userAnswerLower.includes('nu există') || userAnswerLower.includes('no nash'))) {
+            if (correctEquilibria.length === 0 &&
+                (userAnswerLower.includes('nu există') ||
+                    userAnswerLower.includes('no nash') ||
+                    userAnswerLower.includes('no pure'))) {
                 score = 100;
                 feedback = `Corect! Nu există echilibru Nash pur pentru această matrice.`;
+            } else if (correctEquilibria.length === 0) {
+                score = 0;
+                feedback = `Răspuns incorect. Nu există echilibru Nash pur pentru această matrice. Trebuie să răspunzi "Nu există echilibru Nash pur".`;
             } else {
                 score = 0;
-                feedback = `Răspuns incorect. Folosește formatul: (rând, coloană) sau (rând, coloană);(rând, coloană). Exemplu: (3, 1) sau (2, 2);(3, 1)`;
+                feedback = `Răspuns incorect. Folosește formatul: (rând,coloană). Exemplu: (1,2) sau (1,2) (2,1) pentru mai multe echilibre.`;
             }
-        } else if (correctNash.length === 0) {
+        } else if (correctEquilibria.length === 0) {
             score = 0;
             feedback = `Răspuns incorect. Nu există echilibru Nash pur pentru această matrice.`;
         } else {
-            const parseCorrectAnswer = (eq) => {
-                let match = eq.match(/[Rr]âmd\s+(\d+).*[Cc]oloana\s+(\d+)/i);
-                if (match) {
-                    return { row: parseInt(match[1]) - 1, col: parseInt(match[2]) - 1 };
-                }
-                match = eq.match(/[Rr]ow\s+(\d+).*[Cc]olumn\s+(\d+)/i);
-                if (match) {
-                    return { row: parseInt(match[1]) - 1, col: parseInt(match[2]) - 1 };
-                }
-                return null;
-            };
+            // Count how many correct equilibria were found
+            let correctCount = 0;
+            const foundEquilibria = [];
 
-            const correctPairs = [];
-            if (correctNash.length > 0) {
-                const pairString = correctNash[0];
-                const parts = pairString.split(';');
-                if (parts.length === 2) {
-                    const p1 = parseCorrectAnswer(parts[0]);
-                    const p2 = parseCorrectAnswer(parts[1]);
-                    if (p1 && p2) {
-                        correctPairs.push({ p1Row: p1.row, p1Col: p1.col, p2Row: p2.row, p2Col: p2.col });
+            for (const userEq of userEquilibria) {
+                for (const correctEq of correctEquilibria) {
+                    if (userEq.row === correctEq.row && userEq.col === correctEq.col) {
+                        correctCount++;
+                        foundEquilibria.push(userEq.original);
+                        break;
                     }
                 }
             }
 
-            if (correctPairs.length === 0) {
-                const correctMatches = correctNash.filter(eq =>
-                    userAnswerLower.includes(eq.toLowerCase().replace(/[()]/g, ''))
-                ).length;
+            const totalCorrect = correctEquilibria.length;
+            const correctAnswerFormatted = correctEquilibria.map(e => `(${e.row},${e.col})`).join(' ');
 
-                if (correctMatches === correctNash.length) {
-                    score = 100;
-                    feedback = `Corect! Echilibrul Nash Pur este ${correctAnswer.strategy}.`;
-                } else if (correctNash.length > 0 && userAnswerLower.includes(correctNash[0].toLowerCase().replace(/[()]/g, ''))) {
-                    score = 70;
-                    feedback = `Aproape! Ai identificat un echilibru corect, dar răspunsul complet este: ${correctAnswer.strategy}.`;
-                } else {
-                    score = 0;
-                    feedback = `Răspuns incorect. Echilibrele corecte sunt: ${correctAnswer.strategy}`;
-                }
+            if (correctCount === totalCorrect && userEquilibria.length === totalCorrect) {
+                // Perfect: found all equilibria and no extra
+                score = 100;
+                feedback = `Excelent! Ai găsit toate echilibrele Nash corecte: ${correctAnswerFormatted}`;
+            } else if (correctCount === totalCorrect) {
+                // Found all correct but also included wrong ones
+                const penaltyPerWrong = 10;
+                const extraWrong = userEquilibria.length - correctCount;
+                const penalty = Math.min(20, extraWrong * penaltyPerWrong);
+                score = Math.max(70, 100 - penalty);
+                feedback = `Bun! Ai găsit toate echilibrele corecte (${foundEquilibria.join(' ')}), dar ai inclus și ${extraWrong} răspunsuri greșite. Scor: ${score}%.`;
+            } else if (correctCount > 0) {
+                // Found some correct equilibria
+                const percentPerEquilibrium = Math.floor(80 / totalCorrect);
+                score = Math.min(95, correctCount * percentPerEquilibrium);
+                const remaining = totalCorrect - correctCount;
+                feedback = `Parțial corect! Ai găsit ${correctCount}/${totalCorrect} echilibre (${foundEquilibria.join(' ')}). Te mai lipsesc ${remaining}. Răspunsul complet: ${correctAnswerFormatted}. Scor: ${score}%.`;
             } else {
-                let matchedCount = 0;
-                const matchedEquilibria = [];
-                let hasPartialInput = userEquilibria.some(e => e.isPartial);
-
-                for (const userEq of userEquilibria) {
-                    for (const correctEq of correctPairs) {
-                        let isMatch = false;
-
-                        if (userEq.isPartial) {
-                            // userEq is already 0-indexed after parsing
-                            // correctEq is 0-indexed from parseCorrectAnswer
-                            isMatch = (userEq.p1Row === correctEq.p1Row && userEq.p1Col === correctEq.p1Col) ||
-                                (userEq.p1Row === correctEq.p2Row && userEq.p1Col === correctEq.p2Col);
-                        } else {
-                            // Both are 0-indexed, direct comparison
-                            isMatch = (userEq.p1Row === correctEq.p1Row &&
-                                userEq.p1Col === correctEq.p1Col &&
-                                userEq.p2Row === correctEq.p2Row &&
-                                userEq.p2Col === correctEq.p2Col);
-                        }
-
-                        if (isMatch) {
-                            matchedCount++;
-                            matchedEquilibria.push(userEq.original);
-                            break;
-                        }
-                    }
-                }
-
-                if (matchedCount === correctPairs.length && userEquilibria.length === correctPairs.length) {
-                    score = 100;
-                    feedback = `Excelent! Ai găsit toate echilibrele Nash: ${matchedEquilibria.join(', ')}.`;
-                } else if (matchedCount > 0) {
-                    // Apply partial credit with penalty for incomplete answers
-                    // Base percentage: 60% per correct equilibrium found
-                    const percentagePerEquilibrium = 60;
-                    const partialScore = (matchedCount / correctPairs.length) * percentagePerEquilibrium;
-
-                    // Bonus if all user answers are correct (no wrong answers)
-                    const allUserAnswersCorrect = matchedCount === userEquilibria.length;
-                    const bonus = allUserAnswersCorrect ? 10 : 0;
-
-                    score = Math.min(95, Math.round(partialScore + bonus));
-
-                    const formattedCorrectAnswer = correctAnswer.strategy
-                        .replace(/Rând\s+/gi, '')
-                        .replace(/Coloana\s+/gi, '');
-
-                    if (hasPartialInput && matchedCount > 0) {
-                        feedback = `Bun răspuns parțial! Ai identificat corect o parte din echilibru: ${matchedEquilibria.join(', ')}, dar răspunsul complet este: ${formattedCorrectAnswer}`;
-                    } else {
-                        feedback = `Parțial corect! Ai găsit ${matchedCount} din ${correctPairs.length} echilibre (${score}%). Răspunsul complet: ${formattedCorrectAnswer}`;
-                    }
-                } else {
-                    score = 0;
-                    const formattedCorrectAnswer = correctAnswer.strategy
-                        .replace(/Rând\s+/gi, '')
-                        .replace(/Coloana\s+/gi, '');
-                    feedback = `Răspuns incorect. Echilibrele Nash corecte sunt: ${formattedCorrectAnswer}`;
-                }
+                // Found no correct equilibria
+                score = 0;
+                feedback = `Răspuns incorect. Nu ai identificat corect niciun echilibru Nash. Echilibrele corecte sunt: ${correctAnswerFormatted}`;
             }
         }
     } else if (type === 'CSP') {

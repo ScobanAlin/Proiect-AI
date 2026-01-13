@@ -1,6 +1,37 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { MessageSquare, Send, Sparkles, Bot, User } from 'lucide-react';
 
+// Helper function to convert markdown links to clickable links
+const parseMarkdownLinks = (text) => {
+    const parts = [];
+    const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+    let lastIndex = 0;
+    let match;
+
+    while ((match = linkRegex.exec(text)) !== null) {
+        // Add text before the link
+        if (match.index > lastIndex) {
+            parts.push(text.substring(lastIndex, match.index));
+        }
+
+        // Add the link
+        parts.push({
+            type: 'link',
+            text: match[1],
+            url: match[2]
+        });
+
+        lastIndex = match.index + match[0].length;
+    }
+
+    // Add remaining text
+    if (lastIndex < text.length) {
+        parts.push(text.substring(lastIndex));
+    }
+
+    return parts.length > 0 ? parts : [text];
+};
+
 const ChatInterface = ({ generateChatResponse }) => {
     const [chatMessages, setChatMessages] = useState([]);
     const [chatInput, setChatInput] = useState('');
@@ -192,13 +223,39 @@ const ChatInterface = ({ generateChatResponse }) => {
                                         : '0 4px 15px rgba(0, 0, 0, 0.05)',
                                     border: msg.role === 'user' ? 'none' : '1px solid rgba(102, 126, 234, 0.1)'
                                 }}>
-                                    <pre style={{
+                                    <div style={{
                                         whiteSpace: 'pre-wrap',
                                         fontSize: '14px',
                                         lineHeight: '1.6',
                                         margin: 0,
                                         fontFamily: 'inherit'
-                                    }}>{msg.content}</pre>
+                                    }}>
+                                        {parseMarkdownLinks(msg.content).map((part, i) => {
+                                            if (typeof part === 'string') {
+                                                return <span key={i}>{part}</span>;
+                                            } else if (part.type === 'link') {
+                                                return (
+                                                    <a
+                                                        key={i}
+                                                        href={part.url}
+                                                        target="_blank"
+                                                        rel="noopener noreferrer"
+                                                        style={{
+                                                            color: msg.role === 'user' ? '#ffffff' : '#667eea',
+                                                            textDecoration: 'underline',
+                                                            fontWeight: '600',
+                                                            cursor: 'pointer'
+                                                        }}
+                                                        onMouseEnter={(e) => e.currentTarget.style.color = msg.role === 'user' ? '#e0e7ff' : '#764ba2'}
+                                                        onMouseLeave={(e) => e.currentTarget.style.color = msg.role === 'user' ? '#ffffff' : '#667eea'}
+                                                    >
+                                                        {part.text}
+                                                    </a>
+                                                );
+                                            }
+                                            return null;
+                                        })}
+                                    </div>
                                 </div>
                                 {msg.role === 'user' && (
                                     <div style={{

@@ -54,8 +54,25 @@ export const generateSearchInstance = (problemName, difficultyConfig = {}) => {
 
 export const generateNashInstance = (difficultyConfig = {}) => {
     const config = db.getGameConfig();
-    const rowRange = difficultyConfig.nashRows || { min: 2, max: 4 };
-    const colRange = difficultyConfig.nashCols || { min: 2, max: 4 };
+
+    // Extract difficulty level or use defaults
+    let rowRange = { min: 2, max: 4 };
+    let colRange = { min: 2, max: 4 };
+
+    if (difficultyConfig.difficulty === 'easy') {
+        rowRange = { min: 2, max: 2 };
+        colRange = { min: 2, max: 3 };
+    } else if (difficultyConfig.difficulty === 'medium') {
+        rowRange = { min: 2, max: 3 };
+        colRange = { min: 2, max: 4 };
+    } else if (difficultyConfig.difficulty === 'hard') {
+        rowRange = { min: 3, max: 4 };
+        colRange = { min: 3, max: 5 };
+    }
+
+    // Override with explicit ranges if provided
+    rowRange = difficultyConfig.nashRows || rowRange;
+    colRange = difficultyConfig.nashCols || colRange;
 
     const rows = Math.floor(Math.random() * (rowRange.max - rowRange.min + 1)) + rowRange.min;
     const cols = Math.floor(Math.random() * (colRange.max - colRange.min + 1)) + colRange.min;
@@ -112,13 +129,13 @@ export const generateQuestion = (type, difficultyConfig = {}) => {
                     problem: { ...nashProblem, instance },
                     correctAnswer,
                     type: 'GameTheory',
-                    text: `Pentru jocul dat în forma normală cu plățile (P1, P2):\n\n${instance.visual}\n\n**Există Echilibru Nash Pur? Care este acesta?**`
+                    text: `Matrice de plăți (P1, P2) - ${instance.rows}x${instance.cols}:\n\n${instance.visual}\n\n**Găsiți Echilibrele Nash (pure)?**\n\n*Format răspuns: (rând, coloană) - ex: (1, 2) sau (2, 3); (1, 1) pentru mai multe echilibre*`
                 };
 
                 db.logQuestion(nashProblem.id, instance, correctAnswer);
                 resolve(question);
             } else if (type === 'csp') {
-                const instance = generateRandomCSPInstance();
+                const instance = generateRandomCSPInstance(3, 5, difficultyConfig);
                 const comparisonResults = runCSPComparison(
                     instance.variables,
                     instance.domains,
@@ -188,7 +205,7 @@ export const generateQuestion = (type, difficultyConfig = {}) => {
                         rawSolution: correctAnswer
                     },
                     type: 'CSP',
-                    text: `${instance.instanceText}\n\nConstraints: ${constraintsText}\n\n**Using ${selectedResult.optimization}, what are the values for: ${remainingVars.join(', ')}?**`,
+                    text: `${instance.instanceText}\n\nConstraints: ${constraintsText}\n\n**Folosind optimizarea: ${selectedResult.optimization}**\n\nCare sunt valorile pentru: ${remainingVars.join(', ')}?`,
                     comparisonResults,
                     selectedOptimization: selectedResult.optimization,
                     remainingVariables: remainingVars
@@ -197,18 +214,11 @@ export const generateQuestion = (type, difficultyConfig = {}) => {
                 db.logQuestion(null, instance, question.correctAnswer);
                 resolve(question);
             } else if (type === 'adversarial') {
-                const instance = generateAdversarialInstance();
+                const instance = generateAdversarialInstance(difficultyConfig);
                 const solution = solveMinimaxAlphaBeta(instance);
 
-                // Format tree structure for display
-                const formatTreeText = (parents, values, leafValues) => {
-                    const lines = [`Structură arbore (${parents.length} noduri, ${leafValues.length} frunze):`];
-                    lines.push(`Vector tati (parents): [${parents.join(', ')}]`);
-                    lines.push(`Valori noduri (values): [${values.map(v => v === null ? '-' : v).join(', ')}]`);
-                    lines.push(`\nExplicație: parents[i] = părintele nodului i, parents[0] = -1 (rădăcină)`);
-                    lines.push(`Frunzele sunt nodurile cu valori numerice`);
-                    return lines.join('\n');
-                };
+                // Format values array with '-' for internal nodes (non-leaves)
+                const formattedValues = instance.values.map(v => v === null ? '-' : v);
 
                 const question = {
                     id: Date.now(),
@@ -224,27 +234,7 @@ export const generateQuestion = (type, difficultyConfig = {}) => {
                         type: 'Adversarial'
                     },
                     type: 'Adversarial',
-                    text: `${formatTreeText(instance.parents, instance.values, instance.leafValues)}
-
-**Cum funcționează Minimax cu Alpha-Beta Pruning:**
-
-1. **Minimax**: Calculează cea mai bună mutare pentru jucător MAX care se opune jucătorului MIN
-   - MAX maximizează scorul (noduri la nivel par)
-   - MIN minimizează scorul (noduri la nivel impar)
-   - Valori la frunze = rezultatele finalelor
-
-2. **Alpha-Beta Pruning**: Optimizare care elimină ramuri care nu pot afecta rezultatul final
-   - α (alpha) = cea mai bună valoare pentru MAX până acum
-   - β (beta) = cea mai bună valoare pentru MIN până acum
-   - Dacă β ≤ α, putem tăia ramura rămasă (nu mai analizez alte mutări)
-
-3. **Ordine explorare**: Stânga → Dreapta (evaluez copii în ordine de la stânga la dreapta)
-
-**Răspunsul trebuie să conțină:**
-- Valoarea optimă la rădăcină (rezultatul final al Minimax)
-- Numărul de frunze vizitate (cât de eficient a fost Alpha-Beta pruning)
-
-Exemplu: "2, 7" (valoarea 2, vizitate 7 frunze din ${instance.leafValues.length})`
+                    text: `Arbore de joc cu ${instance.parents.length} noduri și ${instance.leafValues.length} frunze.\nVector tati: [${instance.parents.join(', ')}]\nValori noduri: [${formattedValues.join(', ')}]\n\nCalculați folosind Minimax cu Alpha-Beta Pruning:\n- Valoarea rădăcinii\n- Numărul de frunze vizitate\n\nFormat: "valoare, nr_frunze"`
                 };
 
                 db.logQuestion(null, instance, question.correctAnswer);

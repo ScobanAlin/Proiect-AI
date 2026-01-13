@@ -5,6 +5,22 @@ import { parseCSPQuestion } from './cspSolver';
 import { runCSPComparison, generateAdversarialInstance, solveMinimaxAlphaBeta } from './algorithmSolvers';
 import { generateRandomCSPInstance } from './cspGenerator';
 
+// Helper function to format constraint for display
+const formatConstraint = (key, fn) => {
+    const [a, b] = key.split(',');
+    const body = fn.toString();
+    if (body.includes('!==')) return `${a} != ${b}`;
+    if (body.includes('a <= b')) return `${a} <= ${b}`;
+    if (body.includes('a < b')) return `${a} < ${b}`;
+    if (body.includes('a >= b')) return `${a} >= ${b}`;
+    if (body.includes('a > b')) return `${a} > ${b}`;
+    if (body.includes('Math.abs') && body.includes('>= 2')) return `|${a}-${b}| >= 2`;
+    if (body.includes('Math.abs') && body.includes('<= ')) return `|${a}-${b}| <= value`;
+    if (body.includes('Math.abs') && body.includes('> ')) return `|${a}-${b}| > value`;
+    if (body.includes('Math.abs') && body.includes('< ')) return `|${a}-${b}| < value`;
+    return `${a} ? ${b}`;
+};
+
 export const generateChatResponse = (question) => {
     const lowerText = question.toLowerCase();
 
@@ -30,7 +46,8 @@ export const generateChatResponse = (question) => {
             `**Rezultat:**\n` +
             `• Valoare rădăcină: **${result.rootValue}**\n` +
             `• Frunze vizitate: **${result.visitedLeaves}** / ${result.totalLeaves}\n` +
-            `• Optimizare: Alpha-Beta pruning`;
+            `• Optimizare: Alpha-Beta pruning\n\n` +
+            `📚 **Referință:** [Minimax & Alpha-Beta - Slides](https://docs.google.com/presentation/d/1GeeTHsPKhCAlejgrrthnLVHIw-1gSBo5coW75vqh2lk/edit?slide=id.gfacdcaa922_0_0#slide=id.gfacdcaa922_0_0)`;
     }
 
     // Check for CSP question - try parsing first
@@ -61,11 +78,14 @@ export const generateChatResponse = (question) => {
             const constraintsText = Object.keys(instance.constraints).length > 0
                 ? Object.keys(instance.constraints).map(key => {
                     const desc = instance.constraintDescriptions?.[key];
-                    return desc ? `• ${desc}` : `• ${key.replace(',', ' ↔ ')}`;
+                    if (desc) return `• ${desc}`;
+                    // Use formatConstraint to show the actual operator
+                    const constraintFn = instance.constraints[key];
+                    return `• ${formatConstraint(key, constraintFn)}`;
                 }).join('\n')
                 : '• (none)';
 
-            return `**CSP Analysis Result** ✅\n\n**Problem:** Manual CSP Instance\n${instance.instanceText}\n\n**Constraints:**\n${constraintsText}\n\n**Solution (using ${selectedOptimization}):**\n${solutionText || 'No solution found'}\n\n**Performance:**\n- Nodes explored: ${selectedResult.nodesExplored}\n- Execution time: ${selectedResult.executionTime}ms\n- Status: ${selectedResult.found ? '✅ Solution found' : '❌ No solution'}\n\n**Optimization Comparison:**\n${comparisonResults.map(r => `• ${r.optimization}: ${r.found ? '✅' : '❌'} (${r.nodesExplored} nodes, ${r.executionTime}ms)`).join('\n')}`;
+            return `**CSP Analysis Result** ✅\n\n**Problem:** Manual CSP Instance\n${instance.instanceText}\n\n**Constraints:**\n${constraintsText}\n\n**Solution (using ${selectedOptimization}):**\n${solutionText || 'No solution found'}\n\n**Performance:**\n- Nodes explored: ${selectedResult.nodesExplored}\n- Execution time: ${selectedResult.executionTime}ms\n- Status: ${selectedResult.found ? '✅ Solution found' : '❌ No solution'}\n\n**Optimization Comparison:**\n${comparisonResults.map(r => `• ${r.optimization}: ${r.found ? '✅' : '❌'} (${r.nodesExplored} nodes, ${r.executionTime}ms)`).join('\n')}\n\n📚 **Referință:** [CSP - Material](https://drive.google.com/file/d/1jXRaTY4Mv_BhQjzGS3SfBPiO-Cvi4RHR/view)`;
         }
 
         // Fallback to random instance if parsing fails
@@ -78,19 +98,21 @@ export const generateChatResponse = (question) => {
         );
 
         const remainingVars = instance.remainingVariables;
-        const bestResult = comparisonResults.find(r => r.found) || comparisonResults[0];
+        // Use AC-3 as default optimization for random instances
+        const selectedOptimization = 'AC-3';
+        const bestResult = comparisonResults.find(r => r.optimization === selectedOptimization) || comparisonResults.find(r => r.found) || comparisonResults[0];
         const solution = bestResult.solution || {};
         const solutionText = Object.entries(solution)
             .filter(([k]) => remainingVars.includes(k))
             .map(([k, v]) => `${k}=${v}`)
             .join(', ');
 
-        // Show the randomly generated constraints
+        // Show the randomly generated constraints with actual operators
         const constraintsText = Object.entries(instance.constraints)
-            .map(([key, fn]) => `• ${key.replace(',', ' ↔ ')}`)
+            .map(([key, fn]) => `• ${formatConstraint(key, fn)}`)
             .join('\n') || '• (none)';
 
-        return `**CSP Analysis Result**\n\n**Problem:** ${instance.template}\n${instance.instanceText}\n\n**Constraints:**\n${constraintsText}\n\n**Best Solution (using ${bestResult.optimization}):**\n${solutionText || 'No solution found'}\n\n**Performance:**\n- Nodes explored: ${bestResult.nodesExplored}\n- Execution time: ${bestResult.executionTime}ms\n- Status: ${bestResult.found ? '✅ Solution found' : '❌ No solution'}\n\n**Optimization Comparison:**\n${comparisonResults.map(r => `• ${r.optimization}: ${r.found ? '✅' : '❌'} (${r.nodesExplored} nodes, ${r.executionTime}ms)`).join('\n')}`;
+        return `**CSP Analysis Result**\n\n**Problem:** ${instance.template}\n${instance.instanceText}\n\n**Constraints:**\n${constraintsText}\n\n**Solution (using ${selectedOptimization}):**\n${solutionText || 'No solution found'}\n\n**Performance:**\n- Nodes explored: ${bestResult.nodesExplored}\n- Execution time: ${bestResult.executionTime}ms\n- Status: ${bestResult.found ? '✅ Solution found' : '❌ No solution'}\n\n**Optimization Comparison:**\n${comparisonResults.map(r => `• ${r.optimization}: ${r.found ? '✅' : '❌'} (${r.nodesExplored} nodes, ${r.executionTime}ms)`).join('\n')}\n\n📚 **Referință:** [CSP - Material](https://drive.google.com/file/d/1jXRaTY4Mv_BhQjzGS3SfBPiO-Cvi4RHR/view)`;
     }
 
     const parsedProblems = parseQuestionFromText(question);
@@ -103,10 +125,10 @@ export const generateChatResponse = (question) => {
                     ? `Matricea analizată:\n${p.instance.visual}`
                     : `Exemplu (generat):\n${p.instance.visual}`;
 
-                return `**${p.name}**:\n${problemVisual}\n\n**Răspuns: ${answer.strategy}**\n\n*Justificare*: ${answer.reason}`;
+                return `**${p.name}**:\n${problemVisual}\n\n**Răspuns: ${answer.strategy}**\n\n*Justificare*: ${answer.reason}\n\n📚 **Referință:** [Nash Equilibrium - Slides](https://docs.google.com/presentation/d/1GeeTHsPKhCAlejgrrthnLVHIw-1gSBo5coW75vqh2lk/edit?slide=id.gfacdcaa922_0_38#slide=id.gfacdcaa922_0_38)`;
             } else {
                 const answer = determineOptimalSearchStrategy(p.name, p.instance);
-                return `**${p.name}** (${p.instance.text}):\n\n**Strategie optimă: ${answer.strategy}**\n\n*Justificare*: ${answer.reason}`;
+                return `**${p.name}** (${p.instance.text}):\n\n**Strategie optimă: ${answer.strategy}**\n\n*Justificare*: ${answer.reason}\n\n📚 **Referință:** [Search Strategies - Slides](https://docs.google.com/presentation/d/1X9k_hsLASrJ19ZY1_WoeCdkq2mO4hZPYu1k79X-85-Y/edit?slide=id.g630bf7f818_0_85#slide=id.g630bf7f818_0_85)`;
             }
         });
         return answers.join('\n\n---\n\n');

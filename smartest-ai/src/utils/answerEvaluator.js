@@ -100,10 +100,10 @@ export const evaluateAnswer = (question, userAnswer) => {
 
             if (fullMatches.length > 0) {
                 return fullMatches.map(match => ({
-                    p1Row: parseInt(match[1]),
-                    p1Col: parseInt(match[2]),
-                    p2Row: parseInt(match[3]),
-                    p2Col: parseInt(match[4]),
+                    p1Row: parseInt(match[1]) - 1,  // Convert to 0-indexed
+                    p1Col: parseInt(match[2]) - 1,  // Convert to 0-indexed
+                    p2Row: parseInt(match[3]) - 1,  // Convert to 0-indexed
+                    p2Col: parseInt(match[4]) - 1,  // Convert to 0-indexed
                     original: match[0],
                     isPartial: false
                 }));
@@ -114,8 +114,8 @@ export const evaluateAnswer = (question, userAnswer) => {
 
             if (singleMatches.length > 0) {
                 return singleMatches.map(match => ({
-                    p1Row: parseInt(match[1]),
-                    p1Col: parseInt(match[2]),
+                    p1Row: parseInt(match[1]) - 1,  // Convert to 0-indexed
+                    p1Col: parseInt(match[2]) - 1,  // Convert to 0-indexed
                     p2Row: null,
                     p2Col: null,
                     original: match[0],
@@ -191,16 +191,12 @@ export const evaluateAnswer = (question, userAnswer) => {
                         let isMatch = false;
 
                         if (userEq.isPartial) {
-                            const userRow1Indexed = userEq.p1Row + 1;
-                            const userCol1Indexed = userEq.p1Col + 1;
-                            const correctRow1Indexed = correctEq.p1Row + 1;
-                            const correctCol1Indexed = correctEq.p1Col + 1;
-                            const correctRow2_1Indexed = correctEq.p2Row + 1;
-                            const correctCol2_1Indexed = correctEq.p2Col + 1;
-
-                            isMatch = (userRow1Indexed === correctRow1Indexed && userCol1Indexed === correctCol1Indexed) ||
-                                (userRow1Indexed === correctRow2_1Indexed && userCol1Indexed === correctCol2_1Indexed);
+                            // userEq is already 0-indexed after parsing
+                            // correctEq is 0-indexed from parseCorrectAnswer
+                            isMatch = (userEq.p1Row === correctEq.p1Row && userEq.p1Col === correctEq.p1Col) ||
+                                (userEq.p1Row === correctEq.p2Row && userEq.p1Col === correctEq.p2Col);
                         } else {
+                            // Both are 0-indexed, direct comparison
                             isMatch = (userEq.p1Row === correctEq.p1Row &&
                                 userEq.p1Col === correctEq.p1Col &&
                                 userEq.p2Row === correctEq.p2Row &&
@@ -219,8 +215,16 @@ export const evaluateAnswer = (question, userAnswer) => {
                     score = 100;
                     feedback = `Excelent! Ai găsit toate echilibrele Nash: ${matchedEquilibria.join(', ')}.`;
                 } else if (matchedCount > 0) {
-                    const baseScore = Math.round((matchedCount / correctPairs.length) * 100);
-                    score = baseScore;
+                    // Apply partial credit with penalty for incomplete answers
+                    // Base percentage: 60% per correct equilibrium found
+                    const percentagePerEquilibrium = 60;
+                    const partialScore = (matchedCount / correctPairs.length) * percentagePerEquilibrium;
+
+                    // Bonus if all user answers are correct (no wrong answers)
+                    const allUserAnswersCorrect = matchedCount === userEquilibria.length;
+                    const bonus = allUserAnswersCorrect ? 10 : 0;
+
+                    score = Math.min(95, Math.round(partialScore + bonus));
 
                     const formattedCorrectAnswer = correctAnswer.strategy
                         .replace(/Rând\s+/gi, '')
@@ -229,7 +233,7 @@ export const evaluateAnswer = (question, userAnswer) => {
                     if (hasPartialInput && matchedCount > 0) {
                         feedback = `Bun răspuns parțial! Ai identificat corect o parte din echilibru: ${matchedEquilibria.join(', ')}, dar răspunsul complet este: ${formattedCorrectAnswer}`;
                     } else {
-                        feedback = `Parțial corect! Ai găsit ${matchedCount} din ${correctPairs.length} echilibre. Răspunsul complet: ${formattedCorrectAnswer}`;
+                        feedback = `Parțial corect! Ai găsit ${matchedCount} din ${correctPairs.length} echilibre (${score}%). Răspunsul complet: ${formattedCorrectAnswer}`;
                     }
                 } else {
                     score = 0;

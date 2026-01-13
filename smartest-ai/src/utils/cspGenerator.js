@@ -139,8 +139,19 @@ const CSP_TEMPLATES = [
     }
 ];
 
-export const generateRandomCSPInstance = (minVars = 3, maxVars = 5) => {
-    const numVars = Math.floor(Math.random() * (maxVars - minVars + 1)) + minVars;
+export const generateRandomCSPInstance = (minVars = 3, maxVars = 5, difficultyConfig = {}) => {
+    // Adjust based on difficulty
+    let varRange = { min: minVars, max: maxVars };
+
+    if (difficultyConfig.difficulty === 'easy') {
+        varRange = { min: 2, max: 3 };
+    } else if (difficultyConfig.difficulty === 'medium') {
+        varRange = { min: 3, max: 4 };
+    } else if (difficultyConfig.difficulty === 'hard') {
+        varRange = { min: 4, max: 6 };
+    }
+
+    const numVars = Math.floor(Math.random() * (varRange.max - varRange.min + 1)) + varRange.min;
     const template = CSP_TEMPLATES[Math.floor(Math.random() * CSP_TEMPLATES.length)];
 
     const instance = template.generateInstance(numVars, {

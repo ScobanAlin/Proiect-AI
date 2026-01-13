@@ -495,6 +495,8 @@ export const solveCSPBacktracking = (variables, domains, constraints, partial) =
             return constraints[key](val1, val2);
         }
         if (reverseKey in constraints) {
+            // reverseKey exists as (var2,var1) in constraints
+            // It checks var2 op var1, so we need val2 op val1
             return constraints[reverseKey](val2, val1);
         }
         return true;
@@ -561,6 +563,8 @@ export const solveCSPBacktrackingMRV = (variables, domains, constraints, partial
             return constraints[key](val1, val2);
         }
         if (reverseKey in constraints) {
+            // For reverse key, we need to apply constraint in its original direction
+            // reverseKey constraint is defined as (b, a) so we call it with (val2, val1)
             return constraints[reverseKey](val2, val1);
         }
         return true;
@@ -647,6 +651,8 @@ export const solveCSPBacktrackingForwardChecking = (variables, domains, constrai
             return constraints[key](val1, val2);
         }
         if (reverseKey in constraints) {
+            // For reverse key, we need to apply constraint in its original direction
+            // reverseKey constraint is defined as (b, a) so we call it with (val2, val1)
             return constraints[reverseKey](val2, val1);
         }
         return true;
@@ -747,6 +753,8 @@ export const solveCSPBacktrackingAC3 = (variables, domains, constraints, partial
             return constraints[key](val1, val2);
         }
         if (reverseKey in constraints) {
+            // For reverse key, we need to apply constraint in its original direction
+            // reverseKey constraint is defined as (b, a) so we call it with (val2, val1)
             return constraints[reverseKey](val2, val1);
         }
         return true;
@@ -757,11 +765,21 @@ export const solveCSPBacktrackingAC3 = (variables, domains, constraints, partial
 
         for (const key in constraints) {
             const [v1, v2] = key.split(',');
-            queue.push([v1, v2]);
+            // Only add to queue if both variables exist in domainCopy
+            if (domainCopy[v1] && domainCopy[v2]) {
+                // Add both directions for arc consistency
+                queue.push([v1, v2]);
+                queue.push([v2, v1]);
+            }
         }
 
         while (queue.length > 0) {
             const [xi, xj] = queue.shift();
+
+            // Safety check: ensure both variables exist
+            if (!domainCopy[xi] || !domainCopy[xj]) {
+                continue;
+            }
 
             const beforeSize = domainCopy[xi].length;
             domainCopy[xi] = domainCopy[xi].filter(val => {
@@ -774,7 +792,7 @@ export const solveCSPBacktrackingAC3 = (variables, domains, constraints, partial
 
             if (domainCopy[xi].length < beforeSize) {
                 for (const v of variables) {
-                    if (v !== xi && v !== xj) {
+                    if (v !== xi && v !== xj && domainCopy[v]) {
                         queue.push([v, xi]);
                     }
                 }
@@ -858,9 +876,23 @@ export const runCSPComparison = (variables, domains, constraints, partial) => {
 // ============================================================================
 
 export const generateAdversarialInstance = (options = {}) => {
-    // Generate easier, smaller trees: depth 2-3, max 2-3 children per node
-    const depth = options.depth || (Math.random() < 0.7 ? 2 : 3);
-    const maxChildren = options.maxChildren || (Math.random() < 0.5 ? 2 : 3);
+    // Determine difficulty-based parameters
+    let depth, maxChildren;
+
+    if (options.difficulty === 'easy') {
+        depth = options.depth || 2;
+        maxChildren = options.maxChildren || 2;
+    } else if (options.difficulty === 'medium') {
+        depth = options.depth || (Math.random() < 0.6 ? 2 : 3);
+        maxChildren = options.maxChildren || (Math.random() < 0.5 ? 2 : 3);
+    } else if (options.difficulty === 'hard') {
+        depth = options.depth || (Math.random() < 0.4 ? 3 : 4);
+        maxChildren = options.maxChildren || (Math.random() < 0.5 ? 3 : 4);
+    } else {
+        depth = options.depth || (Math.random() < 0.7 ? 2 : 3);
+        maxChildren = options.maxChildren || (Math.random() < 0.5 ? 2 : 3);
+    }
+
     const maxLeafValue = options.maxLeafValue || 10;
 
     // Build tree structure with parent vector (tati)

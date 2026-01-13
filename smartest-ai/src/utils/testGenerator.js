@@ -15,6 +15,7 @@ export const generateTest = async (questionTypes, difficulty, numQuestions = 10)
 
     const difficultyConfig = {
         easy: {
+            difficulty: 'easy',
             nQueens: 4,
             hanoi: 3,
             graphNodes: 4,
@@ -24,6 +25,7 @@ export const generateTest = async (questionTypes, difficulty, numQuestions = 10)
             advDepth: 2
         },
         medium: {
+            difficulty: 'medium',
             nQueens: 6,
             hanoi: 5,
             graphNodes: 6,
@@ -33,6 +35,7 @@ export const generateTest = async (questionTypes, difficulty, numQuestions = 10)
             advDepth: 3
         },
         hard: {
+            difficulty: 'hard',
             nQueens: 8,
             hanoi: 7,
             graphNodes: 8,
@@ -219,12 +222,13 @@ const formatAnswer = (correctAnswer) => {
             return `Strategy: ${correctAnswer.strategy || 'Unknown'}`;
 
         case 'CSP':
-            if (typeof correctAnswer === 'object') {
-                return Object.entries(correctAnswer)
+            // CSP correctAnswer has structure: { strategy, reason, type, rawSolution }
+            if (correctAnswer.rawSolution && typeof correctAnswer.rawSolution === 'object') {
+                return Object.entries(correctAnswer.rawSolution)
                     .map(([k, v]) => `${k}=${v}`)
                     .join(', ');
             }
-            return String(correctAnswer);
+            return correctAnswer.strategy || String(correctAnswer);
 
         case 'Adversarial':
             return `Root Value: ${correctAnswer.rootValue}, Visited Leaves: ${correctAnswer.visitedLeaves}`;

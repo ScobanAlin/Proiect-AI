@@ -81,9 +81,16 @@ const parseSpecificCSPInstance = (text) => {
             });
         }
 
-        // Parse optimization method
-        const optimizationMatch = text.match(/Using\s+([^,?]+?)(?:\s*,|\s*what|\?)/i);
-        const selectedOptimization = optimizationMatch ? optimizationMatch[1].trim() : 'None';
+        // Parse optimization method - handle multiple formats
+        // Supports: "Using X", "Folosind optimizarea: X", "Optimization: X", "Optimizare: X"
+        const optimizationMatch = text.match(/(?:Using|Folosind|Optimization|Optimizare)(?:\s+optimizarea)?[:\s]+([^\n,?*]+?)(?:\s*[\n,?*]|$)/i);
+        let selectedOptimization = optimizationMatch ? optimizationMatch[1].trim() : 'None';
+
+        // Clean up optimization name - remove markdown and extra text
+        selectedOptimization = selectedOptimization
+            .replace(/\*\*/g, '')
+            .replace(/Care sunt.*$/i, '')
+            .trim();
 
         const instance = {
             template: 'Manual Instance',
